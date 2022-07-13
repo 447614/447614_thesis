@@ -1,0 +1,980 @@
+---
+title: "R Notebook A 447614 BAM Thesis - Data cleaning"
+author: "447614"
+output: html_notebook
+---
+04-07-2022
+
+#-------------------------------------------------------------------------------
+#Packages
+#-------------------------------------------------------------------------------
+Loading the packages:
+```{r}
+library("tidymodels")
+library("readr")
+library("stargazer")
+library("dplyr")
+library("DescTools")
+library("glmnet")
+library("leaps")
+library("xgboost")
+library("themis")
+library("knitr")
+library("ranger")
+library("doParallel")
+library("vip")
+library("ggridges")
+library("skimr")
+library("forcats")
+library("corrplot")
+library("readr")
+library("neuralnet")
+library('fastDummies')
+library('xtable')
+```
+
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+*Train test data set*
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------------
+#Data
+#-------------------------------------------------------------------------------
+Loading the data:
+```{r}
+tt <- read.csv("Train_test_data_set_FINAL.csv", sep = ";")
+head(tt)
+```
+
+```{r}
+glimpse(tt)
+```
+
+#-------------------------------------------------------------------------------
+#Creating the ESG quartile variable
+#-------------------------------------------------------------------------------
+```{r}
+tt$ESG_quartile <- NA
+
+tt$ESG_quartile <- ifelse(
+  tt$ESG_score_2020 <= 25, 1, 
+  ifelse(
+    (tt$ESG_score_2020 > 25) & (tt$ESG_score_2020 <= 50), 2, 
+    ifelse(
+      (tt$ESG_score_2020 > 50) & (tt$ESG_score_2020 <= 75),
+      3,
+      ifelse(
+        (tt$ESG_score_2020 > 75) & (tt$ESG_score_2020 <= 100),
+        4, NA))))
+```
+
+
+#-------------------------------------------------------------------------------
+#Variables overview
+#-------------------------------------------------------------------------------
+
+*Dependent variable:* 
+ESG_score_2020
+decile_multiclass
+ESG_quartile
+
+*Independent variables:*
+
+*Activity:*
+receivables_turnover
+working_capital_turnover
+total_asset_turnover
+
+*Profitability:*
+gross_profit_margin
+net_profit_margin
+
+*Liquidity:*
+current_ratio
+
+*Solvency:*
+debt_to_assets
+debt_to_ebitda
+interest_coverage
+
+*Valuation:*
+price_to_earnings
+eps
+dividend_yield
+
+*Size measures:*
+market_cap
+n_employees
+total_assets
+
+*Stock characteristics*
+icb_sector_name
+country
+stock_volatility_2020
+
+*ESG data availability*
+esg_data_availability
+
+19 predictors, 3 dependent variables, total = 22
+
+#-------------------------------------------------------------------------------
+#Summary statistics
+#-------------------------------------------------------------------------------
+```{r}
+skim(tt) %>% knit_print()
+```
+There are no missing values.
+
+#-------------------------------------------------------------------------------
+#Sub selection including only relevant features and dependent variables
+#-------------------------------------------------------------------------------
+```{r}
+subset_tt <- c("ISIN", "ESG_score_2020", "decile_multiclass", "ESG_quartile","receivables_turnover", 
+               "working_capital_turnover", "total_asset_turnover",
+               "gross_profit_margin", "net_profit_margin", 
+               "current_ratio", "debt_to_assets", 
+               "debt_to_ebitda", "interest_coverage",
+               "price_to_earnings", "eps", "dividend_yield",
+               "market_cap", "n_employees", "total_assets",
+               "icb_sector_name", 
+               "country", "stock_volatility_2020",
+               "esg_data_availability"
+               )
+tt_sub_final <- tt[subset_tt]
+```
+
+#-------------------------------------------------------------------------------
+#Correlation matrix & multicollinearity:
+#-------------------------------------------------------------------------------
+Creating a correlation matrix:
+```{r}
+tt_sub_final %>% select_if(is.numeric) %>% 
+  cor() %>% corrplot()
+```
+Very high correlations are absent.
+
+#-------------------------------------------------------------------------------
+#Checking the frequencies of categorical variables and solving problems
+#-------------------------------------------------------------------------------
+Too small frequencies result in overfitting.
+
+Checking for the variables:
+*country*
+*icb_sector_name*
+
+Length = 2,263 stocks
+1% is considered as the minimum acceptable frequency which is approximately 23.
+
+*country*
+For this feature, the frequencies are for some values problematic as it is sometimes less than 23, resulting in a frequency of less than 1%.
+```{r}
+table(tt_sub_final$country) 
+table(tt_sub_final$country) / length(tt_sub_final$country)
+```
+
+Rule: <1% -> regroup to "Other"
+BM
+CZ
+GI
+GR
+HU
+IE
+IM
+JE
+LU
+MT
+PL
+PT
+
+Regrouping the values with a frequency of <1% to the category other:
+```{r}
+tt_sub_final$country <- recode(tt_sub_final$country, 
+       BM = "Other", 
+       CZ = "Other", 
+       GI = "Other", 
+       GR = "Other", 
+       HU = "Other", 
+       IE = "Other", 
+       IM = "Other", 
+       JE = "Other",
+       MT = "Other",
+       PL = "Other",
+       PT = "Other",
+       LU = "Other")
+```
+
+Checking whether it works:
+```{r}
+table(tt_sub_final$country) 
+table(tt_sub_final$country) / length(tt_sub_final$country)
+```
+It worked.
+
+*icb_sector_name*
+For this feature, the frequencies are for some values problematic as it is sometimes less than 23, resulting in a frequency of less than 1%.
+
+Removing the spaces, - , and commas.
+```{r}
+tt_sub_final$icb_sector_name <- gsub(" ", "_", tt_sub_final$icb_sector_name)
+tt_sub_final$icb_sector_name <- gsub("-", "_", tt_sub_final$icb_sector_name)
+tt_sub_final$icb_sector_name <- gsub(",", "", tt_sub_final$icb_sector_name)
+```
+
+Showing the frequencies:
+```{r}
+table(tt_sub_final$icb_sector_name)
+```
+
+Rule: <1% (23) -> regroup to other:
+Investment_Banking_and_Brokerage_Services
+Non_life_Insurance
+Open_End_and_Miscellaneous_Investment_Vehicles
+Precious_Metals_and_Mining
+Real_Estate_Investment_Trusts
+Tobacco
+Waste_and_Disposal_Services
+Alternative_Energy
+Finance_and_Credit_Services
+Real_Estate_Investment_and_Services
+
+Regrouping the values with a frequency of <1% to the category other:
+```{r}
+tt_sub_final$icb_sector_name <- recode(tt_sub_final$icb_sector_name,
+       Investment_Banking_and_Brokerage_Services = "Other",
+       Non_life_Insurance = "Other",
+       Open_End_and_Miscellaneous_Investment_Vehicles = "Other",
+       Precious_Metals_and_Mining = "Other",
+       Real_Estate_Investment_Trusts = "Other",
+       Tobacco = "Other",
+       Waste_and_Disposal_Services = "Other",
+       Alternative_Energy = "Other",
+       Finance_and_Credit_Services = "Other",
+       Real_Estate_Investment_and_Services = "Other")
+```
+
+
+Checking whether it worked:
+```{r}
+table(tt_sub_final$icb_sector_name)
+```
+It worked.
+
+#-------------------------------------------------------------------------------
+#Adjustments for percentages
+#-------------------------------------------------------------------------------
+Descriptive statistics before the adjustments:
+```{r}
+stargazer(tt_sub_final, type="text")
+```
+
+Gross profit margin, net profit margin, debt to assets, and dividend yield are in percentage points. The following adjustments result in a percentage:
+```{r}
+tt_sub_final$gross_profit_margin <- tt_sub_final$gross_profit_margin / 100
+tt_sub_final$net_profit_margin <- tt_sub_final$net_profit_margin / 100
+tt_sub_final$debt_to_assets <- tt_sub_final$debt_to_assets / 100
+tt_sub_final$dividend_yield <- tt_sub_final$dividend_yield / 100
+```
+
+```{r}
+stargazer(tt_sub_final, type="text", median = TRUE)
+```
+
+#-------------------------------------------------------------------------------
+#Checking for skewness, winsorizing, and log transformation through histograms
+#-------------------------------------------------------------------------------
+Constructing a histogram for each variable:
+```{r}
+#ESG_score_2020
+tt_sub_final %>% ggplot(aes(x = ESG_score_2020)) + geom_histogram()
+#decile_multiclass
+tt_sub_final %>% ggplot(aes(x = decile_multiclass)) + geom_histogram()
+#ESG_quartile
+tt_sub_final %>% ggplot(aes(x = ESG_quartile)) + geom_histogram()
+#receivables_turnover                                      
+tt_sub_final %>% ggplot(aes(x = receivables_turnover)) + geom_histogram()
+#working_capital_turnover                                 
+tt_sub_final %>% ggplot(aes(x = working_capital_turnover)) + geom_histogram()
+#total_asset_turnover
+tt_sub_final %>% ggplot(aes(x = total_asset_turnover)) + geom_histogram()
+#gross_profit_margin                                        
+tt_sub_final %>% ggplot(aes(x = gross_profit_margin)) + geom_histogram()
+#net_profit_margin                                          
+tt_sub_final %>% ggplot(aes(x = net_profit_margin)) + geom_histogram()
+#current_ratio                                             
+tt_sub_final %>% ggplot(aes(x = current_ratio)) + geom_histogram()
+#debt_to_assets                                           
+tt_sub_final %>% ggplot(aes(x = debt_to_assets)) + geom_histogram()
+#debt_to_ebitda                                             
+tt_sub_final %>% ggplot(aes(x = debt_to_ebitda)) + geom_histogram()
+#interest_coverage
+tt_sub_final %>% ggplot(aes(x = interest_coverage)) + geom_histogram()
+#price_to_earnings                                           
+tt_sub_final %>% ggplot(aes(x = price_to_earnings)) + geom_histogram()
+#eps                                                          
+tt_sub_final %>% ggplot(aes(x = eps)) + geom_histogram()
+#dividend_yield                                               
+tt_sub_final %>% ggplot(aes(x = dividend_yield)) + geom_histogram()
+#market_cap                                                   
+tt_sub_final %>% ggplot(aes(x = market_cap)) + geom_histogram()
+#n_employees                                                  
+tt_sub_final %>% ggplot(aes(x = n_employees)) + geom_histogram()
+#total_assets                                               
+tt_sub_final %>% ggplot(aes(x = total_assets)) + geom_histogram()
+#stock_volatility_2020                                        
+tt_sub_final %>% ggplot(aes(x = stock_volatility_2020)) + geom_histogram()
+#esg_data_availability                                        
+tt_sub_final %>% ggplot(aes(x = esg_data_availability)) + geom_histogram()
+```
+*1* ESG_score_2020:                 Winsorize: NO      Log Transform: NO
+*2* decile_multiclass:              Winsorize: NO      Log Transform: NO
+*3* ESG_quartile:                   Winsorize: NO      Log Transform: NO
+*4* receivables_turnover:           Winsorize: YES     Log Transform: NO (RATIO)
+*5* working_capital_turnover:       Winsorize: YES     Log Transform: NO (RATIO)
+*6* total_asset_turnover:           Winsorize: YES     Log Transform: NO (RATIO)
+*7* gross_profit_margin:            Winsorize: YES     Log Transform: NO (RATIO)        
+*8* net_profit_margin:              Winsorize: YES     Log Transform: NO (RATIO) 
+*9* current_ratio:                  Winsorize: YES     Log Transform: NO (RATIO)
+*10* debt_to_assets:                Winsorize: YES     Log Transform: NO (RATIO)
+*11* debt_to_ebitda:                Winsorize: YES     Log Transform: NO (RATIO) 
+*12* interest_coverage:             Winsorize: YES     Log Transform: NO (RATIO)
+*13* price_to_earnings:             Winsorize: YES     Log Transform: NO (RATIO)
+*14* eps:                           Winsorize: YES     Log Transform: NO (RATIO)
+*15* dividend_yield:                Winsorize: YES     Log Transform: NO (RATIO)
+*16* market_cap:                    Winsorize: YES     Log Transform: YES
+*17* n_employees:                   Winsorize: YES     Log Transform: YES
+*18* total_assets:                  Winsorize: YES     Log Transform: YES
+*19* stock_volatility_2020:         Winsorize: YES     Log Transform: YES
+*20* esg_data_availability:         Convert to dummies 
+*21* icb_sector_name                Use as dummies (step_dummy)
+*22* country                        Use as dummies (step_dummy)
+
+#-------------------------------------------------------------------------------
+#Converting ESG data availability to dummies
+#-------------------------------------------------------------------------------
+Creating dummies (always skip one dummy unless it involves a decision tree).
+0 only has a frequency of 2 -> regroup to low(0 and 0.76) middle(0.95) and high (1).
+```{r}
+tt_sub_final$esg_data_availability_low <- ifelse(
+  (round(tt_sub_final$esg_data_availability,2) == 0.76) | 
+    (tt_sub_final$esg_data_availability == 0.0000000), 1, 0)
+tt_sub_final$esg_data_availability_middle <- ifelse(
+  round(tt_sub_final$esg_data_availability,2) == 0.95, 1, 0)
+tt_sub_final$esg_data_availability_high <- ifelse(
+  tt_sub_final$esg_data_availability == 1.0000000, 1, 0)
+```
+
+Checking their frequencies:
+```{r}
+table(tt_sub_final$esg_data_availability_low)
+table(tt_sub_final$esg_data_availability_middle)
+table(tt_sub_final$esg_data_availability_high)
+```
+Correct, it works and the sum of 1 is 2,263.
+
+#-------------------------------------------------------------------------------
+#Conclusion for variable transformation
+#-------------------------------------------------------------------------------
+
+*Log transform:* -> in recipe
+market_cap 
+n_employees
+total_assets
+stock_volatility_2020
+
+*Winsorize:*
+ALL numeric except dependent variable ESG, ESG decile (decile_multiclass), 
+and ESG quartile
+
+*Step_dummy:* -> in recipe
+icb_sector_name
+country
+
+*Normalize* -> in recipe
+All, except dependent variable ESG
+
+#-------------------------------------------------------------------------------
+#Winsorizing
+#-------------------------------------------------------------------------------
+Cannot be done in recipe and want winsorized descriptive statistics.
+
+*The following variables:*
+*w4* receivables_turnover       1%
+*w5* working_capital_turnover   1%
+*w6* total_asset_turnover       1%
+*w7* gross_profit_margin        1%
+*w8* net_profit_margin          2.5%
+*w9* current_ratio              1%
+*w10* debt_to_assets            1%
+*w11* debt_to_ebitda            1%  
+*w12* interest_coverage         2.5%
+*w13* price_to_earnings         2.5%
+*w14* eps                       2.5%
+*w15* dividend_yield            1%
+*w16* market_cap                1%
+*w17* n_employees               1%
+*w18* total_assets              2.5%
+*w19* stock_volatility_2020     1%
+
+Creating a new dataframe (unwinsorized is stored in the previous one):
+```{r}
+tt_sub_final_w <- tt_sub_final
+```
+
+*w4* receivables_turnover
+```{r}
+tt_sub_final_w$receivables_turnover <- 
+  Winsorize(tt_sub_final_w$receivables_turnover, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$receivables_turnover)
+hist(tt_sub_final_w$receivables_turnover)
+```
+
+*w5* working_capital_turnover 
+```{r}
+tt_sub_final_w$working_capital_turnover <- 
+  Winsorize(tt_sub_final_w$working_capital_turnover, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$working_capital_turnover)
+hist(tt_sub_final_w$working_capital_turnover)
+```
+
+*w6* total_asset_turnover
+```{r}
+tt_sub_final_w$total_asset_turnover <- 
+  Winsorize(tt_sub_final_w$total_asset_turnover, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$total_asset_turnover)
+hist(tt_sub_final_w$total_asset_turnover)
+```
+
+*w7* gross_profit_margin
+```{r}
+tt_sub_final_w$gross_profit_margin <- 
+  Winsorize(tt_sub_final_w$gross_profit_margin, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$gross_profit_margin)
+hist(tt_sub_final_w$gross_profit_margin)
+```
+
+*w8* net_profit_margin
+```{r}
+tt_sub_final_w$net_profit_margin <- 
+  Winsorize(tt_sub_final_w$net_profit_margin, probs = c(0.025, 0.975))
+#showing before and after:
+hist(tt_sub_final$net_profit_margin)
+hist(tt_sub_final_w$net_profit_margin)
+```
+
+*w9* current_ratio
+```{r}
+tt_sub_final_w$current_ratio <- 
+  Winsorize(tt_sub_final_w$current_ratio, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$current_ratio)
+hist(tt_sub_final_w$current_ratio)
+```
+
+*w10* debt_to_assets
+```{r}
+tt_sub_final_w$debt_to_assets <- 
+  Winsorize(tt_sub_final_w$debt_to_assets, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$debt_to_assets)
+hist(tt_sub_final_w$debt_to_assets)
+```
+
+*w11* debt_to_ebitda
+```{r}
+tt_sub_final_w$debt_to_ebitda <- 
+  Winsorize(tt_sub_final_w$debt_to_ebitda, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$debt_to_ebitda)
+hist(tt_sub_final_w$debt_to_ebitda)
+```
+
+*w12* interest_coverage
+```{r}
+tt_sub_final_w$interest_coverage <- 
+  Winsorize(tt_sub_final_w$interest_coverage, probs = c(0.025, 0.975))
+#showing before and after:
+hist(tt_sub_final$interest_coverage)
+hist(tt_sub_final_w$interest_coverage)
+```
+
+*w13* price_to_earnings
+```{r}
+tt_sub_final_w$price_to_earnings <- 
+  Winsorize(tt_sub_final_w$price_to_earnings, probs = c(0.025, 0.975))
+#showing before and after:
+hist(tt_sub_final$price_to_earnings)
+hist(tt_sub_final_w$price_to_earnings)
+```
+
+*w14* eps
+```{r}
+tt_sub_final_w$eps <- 
+  Winsorize(tt_sub_final_w$eps, probs = c(0.025, 0.975))
+#showing before and after:
+hist(tt_sub_final$eps)
+hist(tt_sub_final_w$eps)
+```
+
+*w15* dividend_yield 
+```{r}
+tt_sub_final_w$dividend_yield  <- 
+  Winsorize(tt_sub_final_w$dividend_yield, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$dividend_yield )
+hist(tt_sub_final_w$dividend_yield)
+```
+
+*w16* market_cap
+```{r}
+tt_sub_final_w$market_cap <- 
+  Winsorize(tt_sub_final_w$market_cap, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$market_cap)
+hist(tt_sub_final_w$market_cap)
+```
+
+*w17* n_employees
+```{r}
+tt_sub_final_w$n_employees <- 
+  Winsorize(tt_sub_final_w$n_employees, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$n_employees)
+hist(tt_sub_final_w$n_employees)
+```
+
+*w18* total_assets
+```{r}
+tt_sub_final_w$total_assets <- Winsorize(tt_sub_final_w$total_assets, probs = c(0.025, 0.975))
+#showing before and after:
+hist(tt_sub_final$total_assets)
+hist(tt_sub_final_w$total_assets)
+```
+
+*w19* stock_volatility_2020
+```{r}
+tt_sub_final_w$stock_volatility_2020 <- Winsorize(tt_sub_final_w$stock_volatility_2020, probs = c(0.01, 0.99))
+#showing before and after:
+hist(tt_sub_final$stock_volatility_2020)
+hist(tt_sub_final_w$stock_volatility_2020)
+```
+
+#-------------------------------------------------------------------------------
+# Setting the names correct for reporting purposes
+#-------------------------------------------------------------------------------
+New dataframe:
+```{r}
+tt_sub_final_w_n <- tt_sub_final_w 
+```
+
+Setting the names correct:
+```{r}
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'ESG_score_2020'] <- 'ESG score'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'decile_multiclass'] <- 'ESG decile'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'ESG_quartile'] <- 'ESG quartile'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'receivables_turnover'] <- 'Receivables turnover ratio'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'working_capital_turnover'] <- 'Working capital turnover ratio'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'total_asset_turnover'] <- 'Total asset turnover ratio'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'gross_profit_margin'] <- 'Gross profit margin'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'net_profit_margin'] <- 'Net profit margin'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'current_ratio'] <- 'Current ratio'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'debt_to_assets'] <- 'Debt-to-assets ratio'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'debt_to_ebitda'] <- 'Debt-to-EBITDA ratio'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'interest_coverage'] <- 'Interest coverage ratio'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'price_to_earnings'] <- 'Price-to-earnings ratio'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'eps'] <- 'Earnings per share'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'dividend_yield'] <- 'Dividend yield'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'market_cap'] <- 'Market capitalisation'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'n_employees'] <- 'Number of employees'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'total_assets'] <- 'Total assets'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'stock_volatility_2020'] <- 'Stock volatility'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'esg_data_availability_low'] <- 'ESG data availability low'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'esg_data_availability_middle'] <- 'ESG data availability middle'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'esg_data_availability_high'] <- 'ESG data availability high'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'country'] <- 'Country'
+names(tt_sub_final_w_n)[names(tt_sub_final_w_n) == 'icb_sector_name'] <- 'Sector'
+```
+
+Removing irrelevant feature because of the new dummies:
+```{r}
+tt_sub_final_w_n$esg_data_availability <- NULL
+```
+
+
+#-------------------------------------------------------------------------------
+# Final Descriptive Statistics
+#-------------------------------------------------------------------------------
+
+```{r}
+stargazer(tt_sub_final_w_n, type="text", median = TRUE)
+stargazer(tt_sub_final_w_n, median = TRUE)
+```
+
+#-------------------------------------------------------------------------------
+# Final Correlation matrix
+#-------------------------------------------------------------------------------
+
+Correlation matrix with clear names and correct features:
+```{r}
+correlation_matrix_df <- tt_sub_final_w
+correlation_matrix_df$decile_multiclass <- NULL
+correlation_matrix_df$ESG_quartile <- NULL
+correlation_matrix_df$esg_data_availability <- NULL
+
+#checking the high correlation of the size features
+print("size")
+cor(correlation_matrix_df$total_assets, correlation_matrix_df$market_cap)
+cor(correlation_matrix_df$n_employees, correlation_matrix_df$market_cap)
+
+#checking the vif of total assets and market capitalisation
+model <- lm(ESG_score_2020 ~ total_assets + market_cap, data = correlation_matrix_df)
+print("VIF:")
+VIF(model) #Below 5, not problematic
+
+#checking the correlation among the ESG data availability dummies
+#Not problematic: exclude one category for models (except trees)
+print("availability")
+cor(correlation_matrix_df$esg_data_availability_low, correlation_matrix_df$esg_data_availability_middle)
+cor(correlation_matrix_df$esg_data_availability_low, correlation_matrix_df$esg_data_availability_high)
+cor(correlation_matrix_df$esg_data_availability_middle, correlation_matrix_df$esg_data_availability_high)
+
+#Creating correct names for report
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'ESG_score_2020'] <- 'ESG score'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'receivables_turnover'] <- 'Receivables turnover ratio'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'working_capital_turnover'] <- 'Working capital turnover ratio'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'total_asset_turnover'] <- 'Total asset turnover ratio'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'gross_profit_margin'] <- 'Gross profit margin'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'net_profit_margin'] <- 'Net profit margin'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'current_ratio'] <- 'Current ratio'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'debt_to_assets'] <- 'Debt-to-assets ratio'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'debt_to_ebitda'] <- 'Debt-to-EBITDA ratio'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'interest_coverage'] <- 'Interest coverage ratio'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'price_to_earnings'] <- 'Price-to-earnings ratio'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'eps'] <- 'Earnings per share'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'dividend_yield'] <- 'Dividend yield'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'market_cap'] <- 'Market capitalisation'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'n_employees'] <- 'Number of employees'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'total_assets'] <- 'Total assets'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'stock_volatility_2020'] <- 'Stock volatility'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'esg_data_availability_low'] <- 'ESG data availability low'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'esg_data_availability_middle'] <- 'ESG data availability middle'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'esg_data_availability_high'] <- 'ESG data availability high'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'country'] <- 'Country'
+names(correlation_matrix_df)[names(correlation_matrix_df) == 'icb_sector_name'] <- 'Sector'
+
+correlation_matrix_df %>% select_if(is.numeric) %>% 
+  cor() %>% corrplot(tl.cex = 0.75)
+
+```
+
+#-------------------------------------------------------------------------------
+#Diving into the correlations with ESG score
+#-------------------------------------------------------------------------------
+Constructing a table with only the correlations against the ESG score:
+```{r}
+correlation_dataframe <- as.data.frame(cor(select_if(correlation_matrix_df, is.numeric)))
+correlation_dataframe_2 <- correlation_dataframe[1]
+correlation_dataframe_2
+```
+
+Creating a table for LaTeX:
+```{r}
+xtable(correlation_dataframe_2, digits = 3)
+```
+
+#-------------------------------------------------------------------------------
+#Correlations including sector and country dummies
+#-------------------------------------------------------------------------------
+Adding the columns for sector and country dummies (this is done through a recipe later on)
+```{r}
+tt_sub_final_w_n_dummies <- dummy_cols(tt_sub_final_w_n, select_columns= 'Sector', remove_first_dummy = FALSE)
+tt_sub_final_w_n_dummies <- dummy_cols(tt_sub_final_w_n_dummies, select_columns= 'Country', remove_first_dummy = FALSE)
+```
+
+Removing decile and quartile because this is a correlation of 1:
+```{r}
+tt_sub_final_w_n_dummies$`ESG decile` <- NULL
+tt_sub_final_w_n_dummies$`ESG quartile` <- NULL
+```
+
+Constructing a dataframe with all correlations including all the dummy columns:
+```{r}
+correlation_dataframe_dummies <- as.data.frame(cor(select_if(tt_sub_final_w_n_dummies, is.numeric)))
+```
+
+The dummy variables do not show high correlations.
+
+Creating a table for LaTeX:
+```{r}
+correlation_dataframe_dummies_2 <- correlation_dataframe_dummies [1]
+correlation_dataframe_dummies_2
+xtable(correlation_dataframe_dummies_2, digits = 3)
+```
+
+
+#-------------------------------------------------------------------------------
+# Create cleaned data csv for the machine learning models
+#-------------------------------------------------------------------------------
+```{r}
+write.csv(tt_sub_final_w_n, "tt_sub_final_w_n.csv")
+saveRDS(tt_sub_final_w_n, file = "tt_sub_final_w_n.rds")
+```
+
+
+
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+*Expand data set*
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------------
+#Data
+#-------------------------------------------------------------------------------
+Loading the data:
+```{r}
+expand <- read.csv("Expand_data_set_FINAL.csv", sep = ";")
+head(expand)
+```
+
+#-------------------------------------------------------------------------------
+#Subslection
+#-------------------------------------------------------------------------------
+Same subselection:
+```{r}
+subset_expand_final <- c("ISIN", "receivables_turnover", 
+               "working_capital_turnover", "total_asset_turnover",
+               "gross_profit_margin", "net_profit_margin", 
+               "current_ratio", "debt_to_assets", 
+               "debt_to_ebitda", "interest_coverage",
+               "price_to_earnings", "eps", "dividend_yield",
+               "market_cap", "n_employees", "total_assets",
+               "icb_sector_name", 
+               "country", "stock_volatility_2020",
+               "esg_data_availability"
+               )
+expand_final <- expand[subset_expand_final]
+head(expand_final)
+```
+
+#-------------------------------------------------------------------------------
+#Frequency of categorical variables (same process):
+#-------------------------------------------------------------------------------
+Categorize values that were not in the training set to other, and the ones that
+were categorized to other should be categorized as other.
+
+*country*
+```{r}
+typeof(expand_final$country)
+table(expand_final$country) 
+table(expand_final$country) / length(expand_final$country)
+```
+Rule: <1% based on the train test set-> regroup to "Other"
+BM
+CZ
+GI
+GR
+HU
+IE
+IM
+JE
+MT
+PL
+PT
+LU
+
+In addition for this data set (did not occur in train test data):
+RO, LT, BG, HR, CY, EE, SI, MC, CS, IS
+
+```{r}
+expand_final$country <- recode(expand_final$country, 
+       BM = "Other", 
+       CZ = "Other", 
+       GI = "Other", 
+       GR = "Other", 
+       HU = "Other", 
+       IE = "Other", 
+       IM = "Other", 
+       JE = "Other",
+       MT = "Other",
+       PL = "Other",
+       PT = "Other",
+       LU = "Other",
+       RO = "Other",
+       LT = "Other",
+       BG = "Other",
+       HR = "Other",
+       CY = "Other",
+       EE = "Other",
+       SI = "Other",
+       MC = "Other",
+       CS = "Other",
+       IS = "Other")
+```
+
+
+```{r}
+table(expand_final$country) 
+table(expand_final$country) / length(expand_final$country)
+```
+It worked!
+
+*icb_sector_name*
+removing the spaces, - and commas
+```{r}
+expand_final$icb_sector_name <- gsub(" ", "_", expand_final$icb_sector_name)
+expand_final$icb_sector_name <- gsub("-", "_", expand_final$icb_sector_name)
+expand_final$icb_sector_name <- gsub(",", "", expand_final$icb_sector_name)
+```
+
+```{r}
+table(expand_final$icb_sector_name)
+```
+
+Rule: <1% (23) -> regroup to other:
+Investment_Banking_and_Brokerage_Services
+Non_life_Insurance
+Open_End_and_Miscellaneous_Investment_Vehicles
+Precious_Metals_and_Mining
+Real_Estate_Investment_Trusts
+Tobacco
+Waste_and_Disposal_Services
+Alternative_Energy
+Finance_and_Credit_Services
+Real_Estate_Investment_and_Services
+
+In addition for this data set:
+Life_Insurance
+```{r}
+expand_final$icb_sector_name <- recode(expand_final$icb_sector_name,
+       Investment_Banking_and_Brokerage_Services = "Other",
+       Non_life_Insurance = "Other",
+       Open_End_and_Miscellaneous_Investment_Vehicles = "Other",
+       Precious_Metals_and_Mining = "Other",
+       Real_Estate_Investment_Trusts = "Other",
+       Tobacco = "Other",
+       Waste_and_Disposal_Services = "Other",
+       Alternative_Energy = "Other",
+       Finance_and_Credit_Services = "Other",
+       Real_Estate_Investment_and_Services = "Other",
+       Life_Insurance = "Other")
+```
+
+```{r}
+table(expand_final$icb_sector_name)
+```
+It worked.
+
+#-------------------------------------------------------------------------------
+# Adjustments for percentages
+#-------------------------------------------------------------------------------
+```{r}
+expand_final$gross_profit_margin <- expand_final$gross_profit_margin / 100
+expand_final$net_profit_margin <- expand_final$net_profit_margin / 100
+expand_final$debt_to_assets <- expand_final$debt_to_assets / 100
+expand_final$dividend_yield <- expand_final$dividend_yield / 100
+```
+
+#-------------------------------------------------------------------------------
+# Converting ESG data availability to dummies
+#-------------------------------------------------------------------------------
+```{r}
+expand_final$esg_data_availability_low <- ifelse(
+  (round(expand_final$esg_data_availability,2) == 0.76) | 
+    (expand_final$esg_data_availability == 0.0000000), 1, 0)
+expand_final$esg_data_availability_middle <- ifelse(
+  round(expand_final$esg_data_availability,2) == 0.95, 1, 0)
+expand_final$esg_data_availability_high <- ifelse(expand_final$esg_data_availability == 1.0000000, 1, 0)
+```
+
+#-------------------------------------------------------------------------------
+# Winsorizing
+#-------------------------------------------------------------------------------
+```{r}
+expand_final_w <- expand_final
+```
+
+```{r}
+expand_final_w$receivables_turnover <- Winsorize(expand_final_w$receivables_turnover, probs = c(0.01, 0.99))
+expand_final_w$working_capital_turnover <- Winsorize(expand_final_w$working_capital_turnover, probs = c(0.01, 0.99))
+expand_final_w$total_asset_turnover <- Winsorize(expand_final_w$total_asset_turnover, probs = c(0.01, 0.99))
+expand_final_w$gross_profit_margin <- Winsorize(expand_final_w$gross_profit_margin, probs = c(0.01, 0.99))
+expand_final_w$net_profit_margin <- Winsorize(expand_final_w$net_profit_margin, probs = c(0.025, 0.975))
+expand_final_w$current_ratio <- Winsorize(expand_final_w$current_ratio, probs = c(0.01, 0.99))
+expand_final_w$debt_to_assets <- Winsorize(expand_final_w$debt_to_assets, probs = c(0.01, 0.99))
+expand_final_w$debt_to_ebitda <- Winsorize(expand_final_w$debt_to_ebitda, probs = c(0.01, 0.99))
+expand_final_w$interest_coverage <- Winsorize(expand_final_w$interest_coverage, probs = c(0.025, 0.975))
+expand_final_w$price_to_earnings <- Winsorize(expand_final_w$price_to_earnings, probs = c(0.025, 0.975))
+expand_final_w$eps <- Winsorize(expand_final_w$eps, probs = c(0.025, 0.975))
+expand_final_w$dividend_yield  <- Winsorize(expand_final_w$dividend_yield, probs = c(0.01, 0.99))
+expand_final_w$market_cap <- Winsorize(expand_final_w$market_cap, probs = c(0.01, 0.99))
+expand_final_w$n_employees <- Winsorize(expand_final_w$n_employees, probs = c(0.01, 0.99))
+expand_final_w$total_assets <- Winsorize(expand_final_w$total_assets, probs = c(0.025, 0.975))
+expand_final_w$stock_volatility_2020 <- Winsorize(expand_final_w$stock_volatility_2020, probs = c(0.01, 0.99))
+```
+
+#-------------------------------------------------------------------------------
+# Setting the names correct
+#-------------------------------------------------------------------------------
+```{r}
+expand_final_w_n <- expand_final_w
+```
+
+
+```{r}
+names(expand_final_w_n)[names(expand_final_w_n) == 'ESG_score_2020'] <- 'ESG score'
+names(expand_final_w_n)[names(expand_final_w_n) == 'decile_multiclass'] <- 'ESG decile'
+names(expand_final_w_n)[names(expand_final_w_n) == 'ESG_quartile'] <- 'ESG quartile'
+names(expand_final_w_n)[names(expand_final_w_n) == 'receivables_turnover'] <- 'Receivables turnover ratio'
+names(expand_final_w_n)[names(expand_final_w_n) == 'working_capital_turnover'] <- 'Working capital turnover ratio'
+names(expand_final_w_n)[names(expand_final_w_n) == 'total_asset_turnover'] <- 'Total asset turnover ratio'
+names(expand_final_w_n)[names(expand_final_w_n) == 'gross_profit_margin'] <- 'Gross profit margin'
+names(expand_final_w_n)[names(expand_final_w_n) == 'net_profit_margin'] <- 'Net profit margin'
+names(expand_final_w_n)[names(expand_final_w_n) == 'current_ratio'] <- 'Current ratio'
+names(expand_final_w_n)[names(expand_final_w_n) == 'debt_to_assets'] <- 'Debt-to-assets ratio'
+names(expand_final_w_n)[names(expand_final_w_n) == 'debt_to_ebitda'] <- 'Debt-to-EBITDA ratio'
+names(expand_final_w_n)[names(expand_final_w_n) == 'interest_coverage'] <- 'Interest coverage ratio'
+names(expand_final_w_n)[names(expand_final_w_n) == 'price_to_earnings'] <- 'Price-to-earnings ratio'
+names(expand_final_w_n)[names(expand_final_w_n) == 'eps'] <- 'Earnings per share'
+names(expand_final_w_n)[names(expand_final_w_n) == 'dividend_yield'] <- 'Dividend yield'
+names(expand_final_w_n)[names(expand_final_w_n) == 'market_cap'] <- 'Market capitalisation'
+names(expand_final_w_n)[names(expand_final_w_n) == 'n_employees'] <- 'Number of employees'
+names(expand_final_w_n)[names(expand_final_w_n) == 'total_assets'] <- 'Total assets'
+names(expand_final_w_n)[names(expand_final_w_n) == 'stock_volatility_2020'] <- 'Stock volatility'
+names(expand_final_w_n)[names(expand_final_w_n) == 'esg_data_availability_low'] <- 'ESG data availability low'
+names(expand_final_w_n)[names(expand_final_w_n) == 'esg_data_availability_middle'] <- 'ESG data availability middle'
+names(expand_final_w_n)[names(expand_final_w_n) == 'esg_data_availability_high'] <- 'ESG data availability high'
+names(expand_final_w_n)[names(expand_final_w_n) == 'country'] <- 'Country'
+names(expand_final_w_n)[names(expand_final_w_n) == 'icb_sector_name'] <- 'Sector'
+```
+
+```{r}
+tt_sub_final_w_n$esg_data_availability <- NULL
+```
+
+#-------------------------------------------------------------------------------
+# Descriptive Statistics Expand Data set
+#-------------------------------------------------------------------------------
+```{r}
+stargazer(expand_final_w_n, type = "text", median = TRUE)
+stargazer(expand_final_w_n, median = TRUE)
+```
+
+#-------------------------------------------------------------------------------
+# Create cleaned data csv for the best machine learning model
+#-------------------------------------------------------------------------------
+```{r}
+write.csv(expand_final_w_n, "expand_final_w_n.csv")
+saveRDS(expand_final_w_n, file = "expand_final_w_n.rds")
+```
+
+*End*

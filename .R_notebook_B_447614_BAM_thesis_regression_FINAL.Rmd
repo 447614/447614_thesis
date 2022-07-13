@@ -1,0 +1,969 @@
+---
+title: "R Notebook B 447614 BAM Thesis - Regression"
+author: "447614"
+output: html_notebook
+---
+04-07-2022
+
+#-------------------------------------------------------------------------------
+#Packages
+#-------------------------------------------------------------------------------
+Loading the packages:
+```{r}
+library("tidymodels")
+library("readr")
+library("stargazer")
+library("dplyr")
+library("DescTools")
+library("glmnet")
+library("leaps")
+library("xgboost")
+library("themis")
+library("knitr")
+library("ranger")
+library("doParallel")
+library("vip")
+library("ggridges")
+library("skimr")
+library("forcats")
+library("corrplot")
+library("readr")
+library("neuralnet")
+library('fastDummies')
+```
+
+#-------------------------------------------------------------------------------
+#Data
+#-------------------------------------------------------------------------------
+Loading the data:
+```{r}
+tt_sub_final_w_n <- readRDS(file = "tt_sub_final_w_n.rds")
+head(tt_sub_final_w_n)
+```
+
+#-------------------------------------------------------------------------------
+# Metrics
+#-------------------------------------------------------------------------------
+```{r}
+reg_metrics <- metric_set(rmse, rsq_trad, mae)
+```
+
+
+#-------------------------------------------------------------------------------
+# Split
+#-------------------------------------------------------------------------------
+
+#----------------------------
+#Train-validation-test split
+#----------------------------
+70% for training, 30% for testing
+```{r}
+set.seed(7777)
+tt_split <- initial_split(tt_sub_final_w_n, prop = 0.7)
+tt_split
+```
+
+Creating the dataframes for train and test:
+```{r}
+tt_train <- training(tt_split)
+tt_test  <- testing(tt_split)
+```
+
+#----------------------------
+#Cross validation folds
+#----------------------------
+For model tuning (validation test), a 5-fold cross-validation (CV) is employed.
+The following code creates the CV folds out of the train set:
+```{r}
+set.seed(8225)
+cv_folds <- tt_train %>% 
+  vfold_cv(v =5)
+cv_folds
+```
+
+#-------------------------------------------------------------------------------
+# Standard recipes for all
+#-------------------------------------------------------------------------------
+
+*standard_recipe*
+```{r}
+standard_recipe <- 
+  recipe(`ESG score` ~ 
+           #Activity:
+           `Receivables turnover ratio` + `Working capital turnover ratio` + `Total asset turnover ratio` +
+           #Profitability:
+           `Gross profit margin` + `Net profit margin` + 
+           #Liquidity:
+           `Current ratio` + 
+           #Solvency:
+           `Debt-to-assets ratio` + `Debt-to-EBITDA ratio` + `Interest coverage ratio` + 
+           #Valuation:
+           `Price-to-earnings ratio` + `Earnings per share` + `Dividend yield` + 
+           #Size:
+           `Market capitalisation` + `Number of employees` + `Total assets` + 
+           #characteristics:
+           `Sector` + `Country` + `Stock volatility` +
+           #ESG data availability:
+           `ESG data availability low` + `ESG data availability middle` #for trees add: (ESG data availability high)
+         #Data:
+         , data = tt_train) %>%
+  #Dummies:
+  step_dummy(`Sector`, `Country`) %>% #for trees add: , one_hot = TRUE
+  #Log transformation:
+  step_log(`Market capitalisation`, `Number of employees`, `Total assets`, `Stock volatility`) %>%
+  #Normalization:
+  step_normalize(`Receivables turnover ratio`, `Working capital turnover ratio`, `Total asset turnover ratio`,
+                 `Gross profit margin`, `Net profit margin`, 
+                 `Current ratio`,
+                 `Debt-to-assets ratio`, `Debt-to-EBITDA ratio`, `Interest coverage ratio`,
+                 `Price-to-earnings ratio`, `Earnings per share`, `Dividend yield`, 
+                 `Market capitalisation`, `Number of employees`, `Total assets`,
+                 `Stock volatility`)
+standard_recipe 
+```
+
+Seeing how it looks like on the data set:
+```{r}
+train_baked <- standard_recipe  %>% prep(tt_train)
+train_baked %>% head()
+```
+
+*tree_recipe*
+For a tree: adding the high availability and the one_hot=TRUE to show all categorical variables as a dummy
+```{r}
+tree_recipe <- 
+  recipe(`ESG score` ~ 
+           #Activity:
+           `Receivables turnover ratio` + `Working capital turnover ratio` + `Total asset turnover ratio` +
+           #Profitability:
+           `Gross profit margin` + `Net profit margin` + 
+           #Liquidity:
+           `Current ratio` + 
+           #Solvency:
+           `Debt-to-assets ratio` + `Debt-to-EBITDA ratio` + `Interest coverage ratio` + 
+           #Valuation:
+           `Price-to-earnings ratio` + `Earnings per share` + `Dividend yield` + 
+           #Size:
+           `Market capitalisation` + `Number of employees` + `Total assets` + 
+           #characteristics:
+           `Sector` + `Country` + `Stock volatility` +
+           #ESG data availability:
+           `ESG data availability low` + `ESG data availability middle` + `ESG data availability high`
+         #Data:
+         , data = tt_train) %>%
+  #Dummies:
+  step_dummy(Sector, Country, one_hot = TRUE) %>% 
+  #Log transformation:
+  step_log(`Market capitalisation`, `Number of employees`, `Total assets`, `Stock volatility`) %>%
+  #Normalization:
+  step_normalize(`Receivables turnover ratio`, `Working capital turnover ratio`, `Total asset turnover ratio`,
+                 `Gross profit margin`, `Net profit margin`, 
+                 `Current ratio`,
+                 `Debt-to-assets ratio`, `Debt-to-EBITDA ratio`, `Interest coverage ratio`,
+                 `Price-to-earnings ratio`, `Earnings per share`, `Dividend yield`, 
+                 `Market capitalisation`, `Number of employees`, `Total assets`,
+                 `Stock volatility`)
+tree_recipe 
+```
+
+Seeing how it looks like on the data set:
+```{r}
+train_baked <- tree_recipe  %>% prep(tt_train)
+train_baked %>% head()
+```
+
+This is correct, went from 64 columns to 67 (esg_data_availability_high, sector, country)
+
+#-------------------------------------------------------------------------------
+#Modelling
+#-------------------------------------------------------------------------------
+
+#--------------------------
+# 1: Linear regression
+#--------------------------
+
+#Model:
+```{r}
+lm_mod <- linear_reg() %>% 
+  set_engine("lm", importance = "impurity")
+lm_mod
+```
+
+#Recipe:
+```{r}
+standard_recipe
+```
+
+#Workflow:
+```{r}
+lm_mod_workflow <- 
+  workflow() %>% 
+  add_model(lm_mod) %>% 
+  add_recipe(standard_recipe)
+lm_mod_workflow
+```
+
+#Tuning
+```{r}
+lin_cv <- lm_mod_workflow %>% 
+  tune_grid(resamples = cv_folds,
+            metrics = metric_set(rmse, rsq_trad, mae))
+```
+Save tuning results:
+```{r}
+save(lin_cv, file = "regression_tune_lin")
+```
+
+
+The tuning results:
+```{r}
+lin_cv_metrics <- lin_cv %>% collect_metrics()
+lin_cv_metrics
+```
+
+#Test
+On the test set, the last fit:
+```{r}
+lm_last_fit <- lm_mod_workflow %>% 
+  last_fit(tt_split, metrics = metric_set(rmse, mae, rsq_trad))
+```
+
+Getting the metrics:
+```{r}
+lm_metrics <- lm_last_fit %>% collect_metrics()
+lm_metrics
+```
+
+#--------------------------
+## k-nearest neighbours
+#--------------------------
+
+#Tuning grid
+```{r}
+knn_regr_tune_grid <- tibble(neighbors = 0:25*2 + 1)
+knn_regr_tune_grid
+```
+
+#Model
+```{r}
+knn_regr_mod <- nearest_neighbor(neighbors = tune()) %>% 
+  set_mode("regression") %>% 
+  set_engine("kknn", importance = "impurity")
+```
+
+#Recipe
+```{r}
+standard_recipe
+```
+
+#Workflow
+```{r}
+knn_regr_workflow <-
+  workflow() %>% 
+  add_model(knn_regr_mod) %>% 
+  add_recipe(standard_recipe)
+knn_regr_workflow
+```
+
+#Tuning
+```{r}
+knn_regr_tune_res <- knn_regr_workflow %>% 
+  tune_grid(resamples = cv_folds, 
+            grid = knn_regr_tune_grid,
+            metrics = metric_set(rmse, rsq_trad, mae))
+```
+
+Save tuning results:
+```{r}
+save(knn_regr_tune_res, file = "regression_tune_knn")
+```
+
+The tuning results:
+```{r}
+knn_regr_tune_metrics <- knn_regr_tune_res %>% collect_metrics()
+knn_regr_tune_metrics
+```
+
+Plotting the results:
+```{r out.width = '100%', fig.height=3.5}
+knn_regr_tune_metrics %>% 
+  ggplot(aes(x = neighbors, y = mean)) + 
+  geom_point() + geom_line() + 
+  facet_wrap(~ .metric, scales = "free_y")
+```
+
+# Finalizing workflow
+Selecting the best one:
+```{r}
+knn_regr_best_model <- select_by_one_std_err(knn_regr_tune_res, metric = "rmse", desc(neighbors))
+knn_regr_best_model
+```
+
+Pass it into the workflow:
+```{r}
+knn_regr_workflow_final <- 
+  knn_regr_workflow %>% 
+  finalize_workflow(knn_regr_best_model)
+knn_regr_workflow_final
+```
+#Test
+Last fit on test set:
+```{r}
+knn_regr_last_fit <- knn_regr_workflow_final %>% 
+  last_fit(tt_split, metrics = metric_set(rmse, mae, rsq_trad))
+```
+
+Metrics:
+```{r}
+knn_regr_metrics <- knn_regr_last_fit %>% 
+  collect_metrics()
+knn_regr_metrics
+```
+
+#--------------------------
+## Ridge & Lasso regression
+#--------------------------
+
+#Recipe:
+```{r}
+standard_recipe
+```
+
+#Model
+`alpha = 1` = lasso penalty
+`alpha = 0` = ridge penalty
+```{r}
+ridge_linreg <- linear_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet", importance = "impurity")
+lasso_linreg <- linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet", importance = "impurity")
+```
+
+#Workflows
+```{r}
+ridge_wf <- workflow() %>% 
+  add_recipe(standard_recipe) %>% 
+  add_model(ridge_linreg)
+lasso_wf <- workflow() %>% 
+  add_recipe(standard_recipe) %>% 
+  add_model(lasso_linreg)
+```
+
+Tuning grids:
+```{r}
+grid_lasso <- tibble(penalty = 10^(seq(from = -1, to = 3, length.out = 50)))
+grid_lasso
+grid_ridge <- tibble(penalty = 10^(seq(from = -1, to = 3, length.out = 50)))
+grid_ridge
+```
+
+#Tuning the lasso:
+```{r}
+lasso_tune <- lasso_wf %>% 
+  tune_grid(resamples = cv_folds, 
+            grid = grid_lasso,
+            metrics = metric_set(rmse, rsq_trad, mae))
+```
+
+Save tuning results:
+```{r}
+save(lasso_tune, file = "regression_tune_lasso")
+```
+
+Results:
+```{r}
+lasso_tune_metrics <- lasso_tune %>% collect_metrics()
+lasso_tune_metrics
+```
+
+Plot:
+```{r}
+lasso_tune_metrics <- lasso_tune %>% 
+  collect_metrics()
+lasso_tune_metrics %>% filter(.metric == "rmse") %>% 
+  ggplot(aes(x = penalty, y = mean, 
+             ymin = mean - std_err, ymax = mean + std_err)) + 
+  geom_linerange(alpha = 0.5) + 
+  geom_point() + 
+  scale_x_log10() + 
+  labs(y = "RMSE", x = expression(lambda))
+```
+There is a clear optimum.
+
+Selecting the best one through the one standard error rule:
+```{r}
+lasso_1se_model <- select_by_one_std_err(lasso_tune, metric = "rmse", desc(penalty))
+lasso_1se_model
+```
+
+#Finalize lasso workflow:
+```{r}
+lasso_wf_tuned <- 
+  lasso_wf %>% 
+  finalize_workflow(lasso_1se_model)
+lasso_wf_tuned
+```
+
+#Tuning the ridge:
+```{r}
+ridge_tune <- ridge_wf %>% 
+  tune_grid(resamples = cv_folds, 
+            grid = grid_ridge,
+            metrics = metric_set(rmse, rsq_trad, mae))
+```
+
+Save tuning results:
+```{r}
+save(ridge_tune, file = "regression_tune_ridge")
+```
+
+Results:
+```{r}
+ridge_tune_metrics <- ridge_tune %>% collect_metrics()
+ridge_tune_metrics
+```
+
+
+Plot:
+```{r}
+ridge_tune_metrics <- ridge_tune %>% 
+  collect_metrics()
+ridge_tune_metrics %>% filter(.metric == "rmse") %>% 
+  ggplot(aes(x = penalty, y = mean, 
+             ymin = mean - std_err, ymax = mean + std_err)) + 
+  geom_linerange(alpha = 0.5) + 
+  geom_point() + 
+  scale_x_log10() +
+  labs(y = "RMSE", x = expression(lambda)) 
+```
+There is a clear optimum.
+
+Select the best one through the one standard error rule:
+```{r}
+ridge_1se_model <- select_by_one_std_err(ridge_tune, metric = "rmse", desc(penalty))
+ridge_1se_model
+```
+
+#Finalize ridge workflow:
+```{r}
+ridge_wf_tuned <- 
+  ridge_wf %>% 
+  finalize_workflow(ridge_1se_model)
+ridge_wf_tuned
+```
+
+#The performance of lasso and ridge on the test set:
+Lasso:
+```{r}
+lasso_last_fit <- lasso_wf_tuned %>% 
+  last_fit(tt_split, metrics = metric_set(rmse, mae, rsq_trad))
+lasso_test_metrics <- lasso_last_fit %>% collect_metrics()
+lasso_test_metrics
+```
+
+Ridge:
+```{r}
+ridge_last_fit <- ridge_wf_tuned %>% 
+  last_fit(tt_split, metrics = metric_set(rmse, mae, rsq_trad))
+ridge_test_metrics <- ridge_last_fit %>% collect_metrics()
+ridge_test_metrics
+```
+
+#--------------------------
+## Decision Tree
+#--------------------------
+
+#Model:
+```{r}
+tree_model_tune <- decision_tree(cost_complexity = tune()) %>%   
+  set_mode("regression") %>%   
+  set_engine("rpart")
+```
+
+#Recipe:
+```{r}
+tree_recipe
+```
+
+#Workflow:
+```{r}
+tree_wf <- workflow() %>% 
+  add_recipe(tree_recipe) %>% 
+  add_model(tree_model_tune)
+```
+
+#Pruning (tuning)
+The grid:
+```{r}
+tree_grid <- tibble(cost_complexity = 10^seq(from = -4, to = 0, length.out = 100))
+tree_grid
+```
+
+#Tuning:
+```{r}
+tree_tune <- tree_wf %>% 
+  tune_grid(resamples = cv_folds, 
+            grid = tree_grid,
+            metrics = reg_metrics)
+```
+
+Save tuning results:
+```{r}
+save(tree_tune, file = "regression_tune_tree")
+```
+
+Results:
+```{r}
+tree_tune_res <- tree_tune %>% collect_metrics()
+tree_tune_res
+```
+
+Plot:
+```{r}
+tree_metrics <- tree_tune %>% collect_metrics()
+tree_metrics %>%
+  ggplot(aes(x = cost_complexity, y = mean,
+             ymin = mean - std_err, ymax = mean + std_err)) +
+  geom_errorbar(width = 0.1) +
+  geom_point() + scale_x_log10() +
+  facet_wrap(~ .metric, scale = "free_y")
+```
+
+Select with one standard error rule:
+```{r}
+tree_model <- select_by_one_std_err(tree_tune, metric = "rmse", desc(cost_complexity))
+tree_model
+```
+
+#Finalize workflow:
+```{r}
+tree_wf_tuned <- 
+  tree_wf %>% 
+  finalize_workflow(tree_model)
+tree_wf_tuned
+```
+
+#Test
+Last fit on the test set:
+```{r}
+tree_last_fit <- tree_wf_tuned %>% last_fit(tt_split, metrics = reg_metrics)
+tree_test_metrics <- tree_last_fit %>% collect_metrics()
+tree_test_metrics
+```
+
+Visualize and interpret tree:
+```{r}
+library("rpart.plot")
+extract_fit_parsnip(tree_last_fit)$fit %>% rpart.plot(roundint = FALSE)
+```
+
+Error analysis:
+```{r}
+tree_last_fit %>% augment() %>%
+  select(`ESG score`, .pred, .resid) %>%
+  slice_max(order_by = abs(`ESG score` - .pred), n=1000)
+```
+
+#--------------------------
+## Gradient boosting
+#--------------------------
+
+#Model:
+```{r}
+xgb_model_tune <- 
+  boost_tree(trees = tune(), tree_depth = tune(), 
+             learn_rate = tune(), stop_iter = 500) %>%
+  set_mode("regression") %>%
+  set_engine("xgboost", importance = "impurity")
+```
+
+#Recipe:
+```{r}
+tree_recipe
+```
+
+#Workflow:
+```{r}
+xgb_tune_wf <- workflow() %>%
+  add_recipe(tree_recipe) %>%
+  add_model(xgb_model_tune)
+xgb_tune_wf
+```
+
+#Tuning:
+Speed up computation:
+```{r}
+registerDoParallel()
+```
+
+Grid:
+```{r}
+xgb_grid <- expand.grid(trees = 500 * 1:20, 
+                        learn_rate = c(0.1, 0.01), 
+                        tree_depth = 1:5*2)
+xgb_grid
+```
+
+Performing grid search:
+```{r}
+xgb_tune_res <- tune_grid(
+  xgb_tune_wf,
+  resamples = cv_folds,
+  grid = xgb_grid,
+  metrics = reg_metrics
+)
+```
+
+Save tuning results:
+```{r}
+save(xgb_tune_res, file = "regression_tune_xgb")
+```
+
+Extract the metrics:
+```{r}
+xgb_tune_metrics <- xgb_tune_res %>%
+  collect_metrics()
+xgb_tune_metrics
+```
+
+Selecting parameters through the one standard error rule:
+```{r}
+xgb_model <- select_by_one_std_err(xgb_tune_res, metric = "rmse", trees)
+xgb_model
+```
+
+#Finalize workflow:
+```{r}
+xgb_final_wf <- 
+  xgb_tune_wf %>% 
+  finalize_workflow(xgb_model)
+xgb_final_wf
+```
+
+#Test set performance:
+```{r}
+xgb_final_fit <- xgb_final_wf %>%
+  last_fit(tt_split, metrics = reg_metrics)
+```
+
+Metrics:
+```{r}
+xgb_metrics <- xgb_final_fit %>%
+  collect_metrics()
+xgb_metrics
+```
+
+#--------------------------
+## Random Forest
+#--------------------------
+
+#Recipe:
+```{r}
+tree_recipe
+```
+
+#Model:
+```{r}
+rf_model_tune <- rand_forest(mtry = tune(), trees = 2500) %>% 
+  set_mode("regression") %>%
+  set_engine("ranger", importance = "impurity")
+```
+
+#Workflow:
+```{r}
+rf_tune_wf <- workflow() %>%
+  add_recipe(tree_recipe) %>%
+  add_model(rf_model_tune)
+rf_tune_wf
+```
+
+#Tuning:
+For speeding up the process:
+```{r}
+registerDoParallel()
+```
+
+Tuning with a tuning grid equal to the length of the number of features:
+```{r}
+set.seed(99154345)
+rf_tune_res <- tune_grid(
+  rf_tune_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 1:66), #66 predictors
+  metrics = reg_metrics
+)
+rf_tune_res
+```
+
+Save tuning results:
+```{r}
+save(rf_tune_res, file = "regression_tune_rf")
+```
+
+Collecting the metrics:
+```{r}
+rf_tune_res %>%
+  collect_metrics()
+```
+
+Plot:
+```{r}
+rf_metrics <- rf_tune_res %>% collect_metrics()
+rf_metrics %>%
+  ggplot(aes(x = mtry, y = mean,
+             ymin = mean - std_err, ymax = mean + std_err)) +
+  geom_errorbar(width = 0.1) +
+  geom_point() +
+  facet_wrap(~ .metric, scale = "free_y")
+```
+
+Selecting the best one with the one standard error rule:
+```{r}
+rf_model <- select_by_one_std_err(rf_tune_res, metric = "rmse", mtry)
+rf_model
+```
+
+#Finalize workflow:
+```{r}
+rf_final_wf <- 
+  rf_tune_wf %>% 
+  finalize_workflow(rf_model)
+rf_final_wf
+```
+
+#Test set performance:
+```{r}
+rf_final_fit <- rf_final_wf %>%
+  last_fit(tt_split, metrics = reg_metrics)
+```
+
+Metrics:
+```{r}
+rf_metrics <- rf_final_fit %>%
+  collect_metrics()
+rf_metrics
+```
+
+#---------------------------------
+## Principal Component Regression
+#---------------------------------
+The principal component regression consists of two steps:
+1.Dimensionality reduction
+2.Linear regression on new dimensions
+
+#Recipe :
+Using standard recipe + stating tuning parameters
+```{r}
+pcr_standard_recipe <- 
+  recipe(`ESG score` ~ 
+           #Activity:
+           `Receivables turnover ratio` + `Working capital turnover ratio` + `Total asset turnover ratio` +
+           #Profitability:
+           `Gross profit margin` + `Net profit margin` + 
+           #Liquidity:
+           `Current ratio` + 
+           #Solvency:
+           `Debt-to-assets ratio` + `Debt-to-EBITDA ratio` + `Interest coverage ratio` + 
+           #Valuation:
+           `Price-to-earnings ratio` + `Earnings per share` + `Dividend yield` + 
+           #Size:
+           `Market capitalisation` + `Number of employees` + `Total assets` + 
+           #characteristics:
+           `Sector` + `Country` + `Stock volatility` +
+           #ESG data availability:
+           `ESG data availability low` + `ESG data availability middle` 
+         #Data:
+         , data = tt_train) %>%
+  #Dummies:
+  step_dummy(`Sector`, `Country`) %>% 
+  #Log transformation:
+  step_log(`Market capitalisation`, `Number of employees`, `Total assets`, `Stock volatility`) %>%
+  #Normalization:
+  step_normalize(`Receivables turnover ratio`, `Working capital turnover ratio`, `Total asset turnover ratio`,
+                 `Gross profit margin`, `Net profit margin`, 
+                 `Current ratio`,
+                 `Debt-to-assets ratio`, `Debt-to-EBITDA ratio`, `Interest coverage ratio`,
+                 `Price-to-earnings ratio`, `Earnings per share`, `Dividend yield`, 
+                 `Market capitalisation`, `Number of employees`, `Total assets`,
+                 `Stock volatility`) %>%
+  #Need this for pca tuning:
+  step_pca(all_predictors(), num_comp = tune())
+pcr_standard_recipe
+```
+
+#Model:
+```{r}
+pcr_lm_mod <- linear_reg() %>%
+  set_engine("lm", importance = "impurity")
+```
+
+#Workflow
+The PCR workflow is then:
+```{r}
+pcr_wf <- workflow() %>% 
+  add_model(pcr_lm_mod) %>% 
+  add_recipe(pcr_standard_recipe)
+```
+
+#Tuning
+Tuning grid, a maximum of 63 dimensions.
+```{r}
+tuning_grid_pcr <- tibble(num_comp = 1:63)
+tuning_grid_pcr
+```
+
+```{r}
+pcr_tune <- pcr_wf %>%
+  tune_grid(resamples = cv_folds,
+            grid = tuning_grid_pcr,
+            metrics = reg_metrics)
+```
+
+Save tuning results:
+```{r}
+save(pcr_tune , file = "regression_tune_pcr")
+```
+
+Results:
+```{r}
+pcr_metrics <- pcr_tune %>% collect_metrics()
+pcr_metrics
+```
+
+
+Plot:
+```{r fig.height=4,fig.width=10}
+pcr_tune_metrics <- pcr_tune %>%
+  collect_metrics()
+pcr_tune_metrics %>%
+  ggplot(aes(x = num_comp, y = mean, ymin = mean - std_err, ymax = mean + std_err)) +
+  geom_point() + 
+  geom_errorbar() + 
+  facet_wrap(~ .metric, scale = "free_y")
+```
+
+Using one standard error rule:
+```{r}
+pcr_1se_model <- select_by_one_std_err(pcr_tune, metric = "rmse", num_comp)
+pcr_1se_model
+```
+
+#Finalize workflow:
+```{r}
+pcr_wf_tuned <- 
+  pcr_wf %>% 
+  finalize_workflow(pcr_1se_model)
+pcr_wf_tuned
+```
+
+#Test:
+```{r}
+pcr_last_fit <- pcr_wf_tuned %>% 
+  last_fit(tt_split, metrics = reg_metrics)
+```
+
+Results:
+```{r}
+pcr_test_metrics <- pcr_last_fit %>% collect_metrics()
+pcr_test_metrics 
+```
+
+
+#-------------------------------------------------------------------------------
+## Selecting between the models
+#-------------------------------------------------------------------------------
+
+#Compare
+Comparing the models' performance on the test set:
+```{r}
+lm_metrics2 <- lm_metrics %>% 
+  select(-.estimator, -.config) %>% 
+  mutate(model = "lm")
+knn_regr_metrics2 <- knn_regr_metrics %>% 
+  select(-.estimator, -.config) %>% 
+  mutate(model = "knn")
+lasso_test_metrics2 <- lasso_test_metrics %>% 
+  select(-.estimator, -.config) %>% 
+  mutate(model = "lasso")
+ridge_test_metrics2 <- ridge_test_metrics %>% 
+  select(-.estimator, -.config) %>% 
+  mutate(model = "ridge")
+tree_test_metrics2 <- tree_test_metrics %>% 
+  select(-.estimator, -.config) %>% 
+  mutate(model = "decision_tree")
+xgb_metrics2 <- xgb_metrics %>% 
+  select(-.estimator, -.config) %>% 
+  mutate(model = "xgb")
+rf_metrics2 <- rf_metrics %>% 
+  select(-.estimator, -.config) %>% 
+  mutate(model = "random_forest")
+pcr_test_metrics2  <- pcr_test_metrics  %>% 
+  select(-.estimator, -.config) %>% 
+  mutate(model = "principal_component_regression")
+
+lm_metrics2 %>% bind_rows(knn_regr_metrics2) %>% bind_rows(lasso_test_metrics2) %>% bind_rows(ridge_test_metrics2) %>% bind_rows(tree_test_metrics2) %>% bind_rows(xgb_metrics2) %>% bind_rows(rf_metrics2) %>% bind_rows(pcr_test_metrics2) %>%
+  pivot_wider(names_from = .metric, values_from = .estimate)
+```
+
+Best model based on RMSE, MAE, and R-squared is the gradient boosting model.
+Second, on all three metrics, comes random forest.
+
+#Checking the predictions
+Checking the predictions of XGB on the test set:
+```{r}
+xgb_final_fit %>% collect_predictions()
+```
+
+#Most important features for the best model: XGB
+```{r}
+xgb_important_features <- xgb_final_fit %>% 
+  extract_fit_parsnip() %>% 
+  vip(num_features = 20)
+xgb_important_features
+```
+
+
+#-------------------------------------------------------------------------------
+#Fit to the expand data set to the widen the ESG stock universe
+#-------------------------------------------------------------------------------
+Loading the expand data set:
+```{r}
+expand_final_w_n<- readRDS(file = "expand_final_w_n.rds")
+head(expand_final_w_n)
+```
+
+#XGB
+Performing the gradient boost model:
+```{r}
+set.seed(5555)
+fit_wf_final_xgb <- fit(xgb_final_wf, tt_train)
+final_pred_xgb <- predict(fit_wf_final_xgb, expand_final_w_n)
+head(final_pred_xgb)
+```
+
+Subtracting the predictions:
+```{r}
+list_pred <- as.data.frame(final_pred_xgb)
+list_pred$.pred
+```
+
+
+Creating a dataframe with the .pred and the ISIN:
+```{r}
+expand_final_w_n$xgb_pred <- list_pred$.pred
+head(expand_final_w_n)
+```
+
+Creating a dataframe with the ISIN and the predictions for the 1,742 stocks
+```{r}
+expand_xgb_pred <- expand_final_w_n[c("ISIN", "xgb_pred")]
+head(expand_xgb_pred)
+```
+
+To csv:
+```{r}
+write.csv(expand_xgb_pred, "expand_ESG_score_xgb_pred_04_07_2022.csv")
+```
+
+*End*
+

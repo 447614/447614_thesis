@@ -1,0 +1,435 @@
+---
+title: "R Notebook F 447614 BAM Thesis - Regression robustness"
+author: "447614"
+output: html_notebook
+---
+09-07-2022  
+
+#-------------------------------------------------------------------------------
+#Packages
+#-------------------------------------------------------------------------------
+Loading the packages:
+```{r}
+library("tidymodels")
+library("readr")
+library("stargazer")
+library("dplyr")
+library("DescTools")
+library("glmnet")
+library("leaps")
+library("xgboost")
+library("themis")
+library("knitr")
+library("ranger")
+library("doParallel")
+library("vip")
+library("ggridges")
+library("skimr")
+library("forcats")
+library("corrplot")
+library("readr")
+library("neuralnet")
+library('fastDummies')
+```
+
+#-------------------------------------------------------------------------------
+#Data
+#-------------------------------------------------------------------------------
+Loading the data:
+```{r}
+tt_sub_final_w_n <- readRDS(file = "tt_sub_final_w_n.rds")
+head(tt_sub_final_w_n)
+```
+
+Checking the descriptives:
+```{r}
+stargazer(tt_sub_final_w_n, type = "text", median = TRUE)
+```
+
+#-------------------------------------------------------------------------------
+# Metrics
+#-------------------------------------------------------------------------------
+```{r}
+reg_metrics <- metric_set(rmse, rsq_trad, mae)
+```
+
+#-------------------------------------------------------------------------------
+# Split
+#-------------------------------------------------------------------------------
+
+#----------------------------
+#Train-validation-test split
+#----------------------------
+70% for training, 30% for testing
+```{r}
+set.seed(7777)
+tt_split <- initial_split(tt_sub_final_w_n, prop = 0.7)
+tt_split
+```
+
+Creating the dataframes for train and test:
+```{r}
+tt_train <- training(tt_split)
+tt_test  <- testing(tt_split)
+```
+
+#----------------------------
+#Cross validation folds
+#----------------------------
+For model tuning (validation test), a 5-fold cross-validation (CV) is employed.
+The following code creates the CV folds out of the train set:
+```{r}
+set.seed(8225)
+cv_folds <- tt_train %>% 
+  vfold_cv(v =5)
+cv_folds
+```
+
+#-------------------------------------------------------------------------------
+# Standard recipe
+#-------------------------------------------------------------------------------
+
+*standard_recipe*
+```{r}
+standard_recipe <- 
+  recipe(`ESG score` ~ 
+           #Activity:
+           `Receivables turnover ratio` + `Working capital turnover ratio` + `Total asset turnover ratio` +
+           #Profitability:
+           `Gross profit margin` + `Net profit margin` + 
+           #Liquidity:
+           `Current ratio` + 
+           #Solvency:
+           `Debt-to-assets ratio` + `Debt-to-EBITDA ratio` + `Interest coverage ratio` + 
+           #Valuation:
+           `Price-to-earnings ratio` + `Earnings per share` + `Dividend yield` + 
+           #Size:
+           `Market capitalisation` + `Number of employees` + `Total assets` + 
+           #characteristics:
+           `Sector` + `Country` + `Stock volatility` +
+           #ESG data availability:
+           `ESG data availability low` + `ESG data availability middle` 
+         #Data:
+         , data = tt_train) %>%
+  #Dummies:
+  step_dummy(`Sector`, `Country`) %>% 
+  #Log transformation:
+  step_log(`Market capitalisation`, `Number of employees`, `Total assets`, `Stock volatility`) %>%
+  #Normalization:
+  step_normalize(`Receivables turnover ratio`, `Working capital turnover ratio`, `Total asset turnover ratio`,
+                 `Gross profit margin`, `Net profit margin`, 
+                 `Current ratio`,
+                 `Debt-to-assets ratio`, `Debt-to-EBITDA ratio`, `Interest coverage ratio`,
+                 `Price-to-earnings ratio`, `Earnings per share`, `Dividend yield`, 
+                 `Market capitalisation`, `Number of employees`, `Total assets`,
+                 `Stock volatility`)
+standard_recipe
+```
+
+
+#-------------------------------------------------------------------------------
+# Loop Linear regression
+#-------------------------------------------------------------------------------
+Setting the workflow and the model:
+```{r}
+lm_mod <- linear_reg() %>% 
+  set_engine("lm")
+lm_mod_workflow <- 
+  workflow() %>% 
+  add_model(lm_mod) %>% 
+  add_recipe(standard_recipe)
+```
+
+#Loop:
+Performing 1000 iterations with different train/test splits to obtain the results, average them and compute the SE:
+```{r}
+linear_RMSE <- NA
+linear_mae <- NA
+linear_rsq <- NA
+
+n <- 1000
+
+for(i in 1:n){
+  tt_split_loop <- initial_split(tt_sub_final_w_n, prop = 0.7)
+  tt_train_loop <- training(tt_split_loop)
+  tt_test_loop  <- testing(tt_split_loop)
+  lm_last_fit_loop <- lm_mod_workflow %>% last_fit(tt_split_loop, metrics = metric_set(rmse, mae, rsq_trad))
+  lm_metrics_loop <- lm_last_fit_loop %>% collect_metrics()
+  #print(lm_metrics_loop)
+  linear_RMSE[[length(linear_RMSE) + 1]] <- lm_metrics_loop$.estimate[[1]]
+  linear_mae[[length(linear_mae) + 1]] <- lm_metrics_loop$.estimate[[2]]
+  linear_rsq[[length(linear_rsq) + 1]] <- lm_metrics_loop$.estimate[[3]]
+}
+
+linear_RMSE <- linear_RMSE[-1]
+linear_mae <- linear_mae[-1]
+linear_rsq <- linear_rsq[-1]
+```
+
+Checking the list with different results:
+```{r}
+linear_RMSE
+linear_mae
+linear_rsq
+```
+
+Obtaining the mean and the SE:
+```{r}
+mean(linear_RMSE)
+sd(linear_RMSE)/sqrt(n)
+
+mean(linear_mae)
+sd(linear_mae)/sqrt(n)
+
+mean(linear_rsq)
+sd(linear_rsq)/sqrt(n)
+```
+#-------------------------------------------------------------------------------
+# Loop k-nn
+#-------------------------------------------------------------------------------
+
+#Model
+```{r}
+knn_regr_mod <- nearest_neighbor(neighbors = tune()) %>% 
+  set_mode("regression") %>% 
+  set_engine("kknn")
+```
+
+#Workflow
+```{r}
+knn_regr_workflow <-
+  workflow() %>% 
+  add_model(knn_regr_mod) %>% 
+  add_recipe(standard_recipe)
+knn_regr_workflow
+```
+#Loading tune results
+```{r}
+load("regression_tune_knn")
+```
+
+
+# Finalizing our workflow
+Selecting the best one:
+```{r}
+knn_regr_best_model <- select_by_one_std_err(knn_regr_tune_res, metric = "rmse", desc(neighbors))
+knn_regr_best_model
+```
+
+Pass it into the workflow:
+```{r}
+knn_regr_workflow_final <- 
+  knn_regr_workflow %>% 
+  finalize_workflow(knn_regr_best_model)
+knn_regr_workflow_final
+```
+
+#Loop:
+Performing 1000 iterations with different train/test splits to obtain the results, average them and compute the SE:
+```{r}
+knn_RMSE <- NA
+knn_mae <- NA
+knn_rsq <- NA
+
+n <- 1000
+
+for(i in 1:n){
+  tt_split_loop <- initial_split(tt_sub_final_w_n, prop = 0.7)
+  tt_train_loop <- training(tt_split_loop)
+  tt_test_loop  <- testing(tt_split_loop)
+  knn_last_fit_loop <- knn_regr_workflow_final %>% last_fit(tt_split_loop, metrics = metric_set(rmse, mae, rsq_trad))
+  knn_metrics_loop <- knn_last_fit_loop %>% collect_metrics()
+  #print(knn_metrics_loop)
+  knn_RMSE[[length(knn_RMSE) + 1]] <- knn_metrics_loop$.estimate[[1]]
+  knn_mae[[length(knn_mae) + 1]] <- knn_metrics_loop$.estimate[[2]]
+  knn_rsq[[length(knn_rsq) + 1]] <- knn_metrics_loop$.estimate[[3]]
+}
+
+knn_RMSE <- knn_RMSE[-1]
+knn_mae <- knn_mae[-1]
+knn_rsq <- knn_rsq[-1]
+```
+
+Checking the list with different results:
+```{r}
+knn_RMSE
+knn_mae
+knn_rsq
+```
+
+Obtaining the mean and the SE:
+```{r}
+mean(knn_RMSE)
+sd(knn_RMSE)/sqrt(n)
+
+mean(knn_mae)
+sd(knn_mae)/sqrt(n)
+
+mean(knn_rsq)
+sd(knn_rsq)/sqrt(n)
+
+```
+#-------------------------------------------------------------------------------
+# Loop Lasso
+#-------------------------------------------------------------------------------
+
+#Model:
+```{r}
+lasso_linreg <- linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+```
+
+#Loading tune results
+```{r}
+load("regression_tune_lasso")
+```
+
+#Workflow:
+```{r}
+lasso_wf <- workflow() %>% 
+  add_recipe(standard_recipe) %>% 
+  add_model(lasso_linreg)
+```
+
+# Finalizing our workflow
+Selecting the best one:
+```{r}
+lasso_1se_model <- select_by_one_std_err(lasso_tune, metric = "rmse", desc(penalty))
+lasso_1se_model
+```
+
+Pass it into the workflow:
+```{r}
+lasso_wf_tuned <- 
+  lasso_wf %>% 
+  finalize_workflow(lasso_1se_model)
+lasso_wf_tuned
+```
+
+#Loop:
+Performing 1000 iterations with different train/test splits to obtain the results, average them and compute the SE:
+```{r}
+lasso_RMSE <- NA
+lasso_mae <- NA
+lasso_rsq <- NA
+
+n <- 1000
+
+for(i in 1:n){
+  tt_split_loop <- initial_split(tt_sub_final_w_n, prop = 0.7)
+  tt_train_loop <- training(tt_split_loop)
+  tt_test_loop  <- testing(tt_split_loop)
+  lasso_last_fit_loop <- lasso_wf_tuned %>% last_fit(tt_split_loop, metrics = metric_set(rmse, mae, rsq_trad))
+  lasso_metrics_loop <- lasso_last_fit_loop %>% collect_metrics()
+  #print(lasso_metrics_loop)
+  lasso_RMSE[[length(lasso_RMSE) + 1]] <- lasso_metrics_loop$.estimate[[1]]
+  lasso_mae[[length(lasso_mae) + 1]] <- lasso_metrics_loop$.estimate[[2]]
+  lasso_rsq[[length(lasso_rsq) + 1]] <- lasso_metrics_loop$.estimate[[3]]
+}
+
+lasso_RMSE <- lasso_RMSE[-1]
+lasso_mae <- lasso_mae[-1]
+lasso_rsq <- lasso_rsq[-1]
+```
+
+Checking the list with different results:
+```{r}
+lasso_RMSE
+lasso_mae
+lasso_rsq
+```
+
+Obtaining the mean and the SE:
+```{r}
+mean(lasso_RMSE)
+sd(lasso_RMSE)/sqrt(n)
+
+mean(lasso_mae)
+sd(lasso_mae)/sqrt(n)
+
+mean(lasso_rsq)
+sd(lasso_rsq)/sqrt(n)
+
+```
+
+#-------------------------------------------------------------------------------
+# Loop ridge
+#-------------------------------------------------------------------------------
+
+#Model:
+```{r}
+ridge_linreg <- linear_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet")
+```
+
+#Workflow:
+```{r}
+ridge_wf <- workflow() %>% 
+  add_recipe(standard_recipe) %>% 
+  add_model(ridge_linreg)
+```
+
+#Loading tune results
+```{r}
+load("regression_tune_ridge")
+```
+
+# Finalizing our workflow
+Selecting the best one:
+```{r}
+ridge_1se_model <- select_by_one_std_err(ridge_tune, metric = "rmse", desc(penalty))
+ridge_1se_model
+```
+
+Pass it into the workflow:
+```{r}
+ridge_wf_tuned <- 
+  ridge_wf %>% 
+  finalize_workflow(ridge_1se_model)
+ridge_wf_tuned
+```
+
+#Loop:
+Performing 1000 iterations with different train/test splits to obtain the results, average them and compute the SE:
+```{r}
+ridge_RMSE <- NA
+ridge_mae <- NA
+ridge_rsq <- NA
+
+n <- 1000
+
+for(i in 1:n){
+  tt_split_loop <- initial_split(tt_sub_final_w_n, prop = 0.7)
+  tt_train_loop <- training(tt_split_loop)
+  tt_test_loop  <- testing(tt_split_loop)
+  ridge_last_fit_loop <- ridge_wf_tuned %>% last_fit(tt_split_loop, metrics = metric_set(rmse, mae, rsq_trad))
+  ridge_metrics_loop <- ridge_last_fit_loop %>% collect_metrics()
+  #print(lm_metrics_loop)
+  ridge_RMSE[[length(ridge_RMSE) + 1]] <- ridge_metrics_loop$.estimate[[1]]
+  ridge_mae[[length(ridge_mae) + 1]] <- ridge_metrics_loop$.estimate[[2]]
+  ridge_rsq[[length(ridge_rsq) + 1]] <- ridge_metrics_loop$.estimate[[3]]
+}
+
+ridge_RMSE <- ridge_RMSE[-1]
+ridge_mae <- ridge_mae[-1]
+ridge_rsq <- ridge_rsq[-1]
+```
+
+Checking the list with different results:
+```{r}
+ridge_RMSE
+ridge_mae
+ridge_rsq
+```
+
+Obtaining the mean and the SE:
+```{r}  
+mean(ridge_RMSE)
+sd(ridge_RMSE)/sqrt(n)
+
+mean(ridge_mae)
+sd(ridge_mae)/sqrt(n)
+
+mean(ridge_rsq)
+sd(ridge_rsq)/sqrt(n)
+```

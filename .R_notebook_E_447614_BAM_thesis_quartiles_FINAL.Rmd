@@ -1,0 +1,808 @@
+---
+title: "R Notebook E 447614 BAM Thesis - Quartiles"
+author: "447614"
+output: html_notebook
+---
+09-07-2022
+
+#-------------------------------------------------------------------------------
+#Packages
+#-------------------------------------------------------------------------------
+```{r}
+library("tidymodels")
+library("readr")
+library("knitr")
+library("skimr")
+library("corrplot")
+library("stargazer")
+library("dplyr")
+library("DescTools")
+library("glmnet")
+library("leaps")
+library("doParallel")
+library("themis")
+library("xgboost")
+library("ranger")
+library("vip")
+library("ggridges")
+library("forcats")
+library("neuralnet")
+```
+
+#-------------------------------------------------------------------------------
+#Data
+#-------------------------------------------------------------------------------
+Loading the data:
+```{r}
+tt_sub_final_w_n <- readRDS(file = "tt_sub_final_w_n.rds")
+head(tt_sub_final_w_n)
+```
+
+Checking the descriptives:
+```{r}
+stargazer(tt_sub_final_w_n, type = "text", median = TRUE)
+```
+
+#Factor
+Setting the dependent variable as a factor
+```{r}
+tt_sub_final_w_n$`ESG quartile` <- as.factor(tt_sub_final_w_n$`ESG quartile`)
+str(tt_sub_final_w_n$`ESG quartile`)
+typeof(tt_sub_final_w_n$`ESG quartile`)
+```
+
+#-------------------------------------------------------------------------------
+# (Im)Balance
+#-------------------------------------------------------------------------------
+Checking the imbalance:
+```{r}
+tt_sub_final_w_n %>% count(`ESG quartile`) %>% 
+  mutate(prop = n / sum(n))
+```
+
+
+#-------------------------------------------------------------------------------
+# Metrics
+#-------------------------------------------------------------------------------
+```{r}
+class_metrics <- metric_set(accuracy, sensitivity, specificity, precision, roc_auc, kap, f_meas, bal_accuracy)
+```
+
+#-------------------------------------------------------------------------------
+# Split
+#-------------------------------------------------------------------------------
+
+#Train-validation-test split
+70% for training, 30% for testing
+Including a stratified split, makes sure that there is balance between train and 
+test set to ensure a similar representation.
+```{r}
+set.seed(7777)
+tt_split <- initial_split(tt_sub_final_w_n, prop = 0.7, strata = `ESG quartile`)
+tt_split
+```
+
+Creating the dataframes for train and test:
+```{r}
+tt_train <- training(tt_split)
+tt_test  <- testing(tt_split)
+```
+
+#Checking the balance
+```{r}
+tt_train %>% count(`ESG quartile`) %>% 
+  mutate(prop = n / sum(n))
+tt_test %>% count(`ESG quartile`) %>% 
+  mutate(prop = n / sum(n))
+```
+The distribution is approximately the same among the train and test set.
+
+#CV
+For model tuning (validation test), a 5-fold cross-validation (CV) is employed. 
+The following code creates the CV folds, through a stratified split, out of the train set:
+```{r}
+set.seed(8225)
+cv_folds <- tt_train %>% 
+  vfold_cv(v =5, strata = `ESG quartile`)
+cv_folds
+```
+
+
+#-------------------------------------------------------------------------------
+# Standard recipe for all
+#-------------------------------------------------------------------------------
+
+*standard_recipe*
+```{r}
+standard_recipe <- 
+  recipe(`ESG quartile` ~ 
+           #Activity:
+           `Receivables turnover ratio` + `Working capital turnover ratio` + `Total asset turnover ratio` +
+           #Profitability:
+           `Gross profit margin` + `Net profit margin` + 
+           #Liquidity:
+           `Current ratio` + 
+           #Solvency:
+           `Debt-to-assets ratio` + `Debt-to-EBITDA ratio` + `Interest coverage ratio` + 
+           #Valuation:
+           `Price-to-earnings ratio` + `Earnings per share` + `Dividend yield` + 
+           #Size:
+           `Market capitalisation` + `Number of employees` + `Total assets` + 
+           #characteristics:
+           `Sector` + `Country` + `Stock volatility` +
+           #ESG data availability:
+           `ESG data availability low` + `ESG data availability middle` #for trees add: (ESG data availability high)
+         #Data:
+         , data = tt_train) %>%
+  #Dummies:
+  step_dummy(`Sector`, `Country`) %>% #for trees add: , one_hot = TRUE
+  #Log transformation:
+  step_log(`Market capitalisation`, `Number of employees`, `Total assets`, `Stock volatility`) %>%
+  #Normalization:
+  step_normalize(`Receivables turnover ratio`, `Working capital turnover ratio`, `Total asset turnover ratio`,
+                 `Gross profit margin`, `Net profit margin`, 
+                 `Current ratio`,
+                 `Debt-to-assets ratio`, `Debt-to-EBITDA ratio`, `Interest coverage ratio`,
+                 `Price-to-earnings ratio`, `Earnings per share`, `Dividend yield`, 
+                 `Market capitalisation`, `Number of employees`, `Total assets`,
+                 `Stock volatility`)
+standard_recipe 
+```
+
+Seeing how it looks like on the data set:
+```{r}
+train_baked <- standard_recipe  %>% prep(tt_train)
+train_baked %>% head()
+```
+
+*tree_recipe*
+For a tree: adding the high availability and the one_hot=TRUE to show all categorical variables as a dummy
+```{r}
+tree_recipe <- 
+  recipe(`ESG quartile` ~ 
+           #Activity:
+           `Receivables turnover ratio` + `Working capital turnover ratio` + `Total asset turnover ratio` +
+           #Profitability:
+           `Gross profit margin` + `Net profit margin` + 
+           #Liquidity:
+           `Current ratio` + 
+           #Solvency:
+           `Debt-to-assets ratio` + `Debt-to-EBITDA ratio` + `Interest coverage ratio` + 
+           #Valuation:
+           `Price-to-earnings ratio` + `Earnings per share` + `Dividend yield` + 
+           #Size:
+           `Market capitalisation` + `Number of employees` + `Total assets` + 
+           #characteristics:
+           `Sector` + `Country` + `Stock volatility` +
+           #ESG data availability:
+           `ESG data availability low` + `ESG data availability middle` + `ESG data availability high`
+         #Data:
+         , data = tt_train) %>%
+  #Dummies:
+  step_dummy(Sector, Country, one_hot = TRUE) %>% 
+  #Log transformation:
+  step_log(`Market capitalisation`, `Number of employees`, `Total assets`, `Stock volatility`) %>%
+  #Normalization:
+  step_normalize(`Receivables turnover ratio`, `Working capital turnover ratio`, `Total asset turnover ratio`,
+                 `Gross profit margin`, `Net profit margin`, 
+                 `Current ratio`,
+                 `Debt-to-assets ratio`, `Debt-to-EBITDA ratio`, `Interest coverage ratio`,
+                 `Price-to-earnings ratio`, `Earnings per share`, `Dividend yield`, 
+                 `Market capitalisation`, `Number of employees`, `Total assets`,
+                 `Stock volatility`)
+tree_recipe 
+```
+
+Seeing how it looks like on the data set:
+```{r}
+train_baked <- tree_recipe  %>% prep(tt_train)
+train_baked %>% head()
+```
+
+This is correct, went from 64 columns to 67 (esg_data_availability_high, sector, country)
+
+
+#-------------------------------------------------------------------------------
+#Modelling
+#-------------------------------------------------------------------------------
+
+#--------------------------
+# 1: Multinomial regression (logistic) LASSO
+#--------------------------
+
+#Recipe:
+```{r}
+standard_recipe
+```
+
+#Model:
+`alpha = 1` = lasso penalty
+`alpha = 0` = ridge penalty
+```{r}
+logistic_model_lasso <- multinom_reg(penalty = tune(), mixture = 1) %>%
+  set_engine("glmnet", importance = "impurity") %>%
+  set_mode("classification")
+```
+
+#Workflow:
+```{r}
+logistic_lasso_mod_workflow <- 
+  workflow() %>% 
+  add_model(logistic_model_lasso) %>% 
+  add_recipe(standard_recipe)
+```
+
+#Tuning:
+Define tuning process
+```{r}
+model_control <- control_grid(save_pred = TRUE)
+```
+
+Grid:
+```{r}
+lasso_logistic_grid <- grid_regular(parameters(logistic_model_lasso), levels = 50)
+lasso_logistic_grid
+```
+
+
+Tune:
+```{r}
+tune_res_lasso <- tune_grid(
+  logistic_model_lasso,
+  standard_recipe,
+  grid = lasso_logistic_grid,
+  control = model_control,
+  metrics = class_metrics,
+  resamples = cv_folds
+)
+```
+
+Save tuning results:
+```{r}
+save(tune_res_lasso, file = "quartile_tune_lasso")
+```
+
+Results:
+```{r}
+lasso_tune_metrics <- tune_res_lasso %>% collect_metrics()
+lasso_tune_metrics
+```
+
+Plot:
+```{r}
+lasso_tune_metrics %>% filter(.metric == "roc_auc") %>% 
+  ggplot(aes(x = penalty, y = mean, 
+             ymin = mean - std_err, ymax = mean + std_err)) + 
+  geom_linerange(alpha = 0.5) + 
+  geom_point() + 
+  scale_x_log10() + 
+  labs(y = "roc auc", x = expression(lambda))
+
+lasso_tune_metrics %>% filter(.metric == "accuracy") %>% 
+  ggplot(aes(x = penalty, y = mean, 
+             ymin = mean - std_err, ymax = mean + std_err)) + 
+  geom_linerange(alpha = 0.5) + 
+  geom_point() + 
+  scale_x_log10() + 
+  labs(y = "accuracy", x = expression(lambda))
+```
+
+Select best model through the one standard error rule:
+```{r}
+lin_class_best_model_lasso <-  select_by_one_std_err(tune_res_lasso, metric = "roc_auc", desc(penalty))
+lin_class_best_model_lasso
+```
+
+#Finalize workflow:
+```{r}
+reg_class_lasso_workflow_final <- 
+  logistic_lasso_mod_workflow %>% 
+  finalize_workflow(lin_class_best_model_lasso)
+reg_class_lasso_workflow_final 
+```
+
+#Test:
+On the test set:
+```{r}
+lr_lasso_last_fit <- reg_class_lasso_workflow_final %>% 
+  last_fit(tt_split, 
+           metrics = class_metrics)
+```
+
+Results:
+```{r}
+lr_lasso_metrics <- lr_lasso_last_fit %>% collect_metrics()
+lr_lasso_metrics
+```
+
+#--------------------------------------------
+# 2.0: Multinomial logistic regression RIDGE
+#--------------------------------------------
+
+#Recipe:
+```{r}
+standard_recipe
+```
+
+#Model:
+`alpha = 1` = lasso penalty
+`alpha = 0` = ridge penalty
+```{r}
+logistic_model_ridge <- multinom_reg(penalty = tune(), mixture = 0) %>%
+  set_engine("glmnet", importance = "impurity") %>%
+  set_mode("classification")
+```
+
+#Workflow:
+```{r}
+logistic_mod_ridge_workflow <- 
+  workflow() %>% 
+  add_model(logistic_model_ridge) %>% 
+  add_recipe(standard_recipe)
+```
+
+#Tuning:
+Define tuning process:
+```{r}
+model_control <- control_grid(save_pred = TRUE)
+```
+
+Grid:
+```{r}
+logistic_grid_ridge <- grid_regular(parameters(logistic_model_ridge), levels = 50)
+logistic_grid_ridge
+```
+
+Tune:
+```{r}
+tune_res_ridge <- tune_grid(
+  logistic_model_ridge,
+  standard_recipe,
+  grid = logistic_grid_ridge,
+  control = model_control,
+  metrics = class_metrics,
+  resamples = cv_folds
+)
+```
+
+Save tuning results:
+```{r}
+save(tune_res_ridge, file = "quartile_tune_ridge")
+```
+
+Results:
+```{r}
+ridge_tune_metrics <- tune_res_ridge %>% collect_metrics()
+ridge_tune_metrics
+```
+
+Plot:
+```{r}
+ridge_tune_metrics %>% filter(.metric == "roc_auc") %>% 
+  ggplot(aes(x = penalty, y = mean, 
+             ymin = mean - std_err, ymax = mean + std_err)) + 
+  geom_linerange(alpha = 0.5) + 
+  geom_point() + 
+  scale_x_log10() + 
+  labs(y = "roc auc", x = expression(lambda))
+
+ridge_tune_metrics %>% filter(.metric == "accuracy") %>% 
+  ggplot(aes(x = penalty, y = mean, 
+             ymin = mean - std_err, ymax = mean + std_err)) + 
+  geom_linerange(alpha = 0.5) + 
+  geom_point() + 
+  scale_x_log10() + 
+  labs(y = "accuracy", x = expression(lambda))
+```
+
+
+Select best model through the one standard error rule:
+```{r}
+lin_class_best_model_ridge <-  select_by_one_std_err(tune_res_ridge, metric = "roc_auc", desc(penalty))
+lin_class_best_model_ridge
+```
+
+#Finalize workflow:
+```{r}
+reg_class_ridge_workflow_final <- 
+  logistic_mod_ridge_workflow %>% 
+  finalize_workflow(lin_class_best_model_ridge)
+reg_class_ridge_workflow_final
+```
+
+#Test:
+On the test set:
+```{r}
+lr_ridge_last_fit <- reg_class_ridge_workflow_final %>% 
+  last_fit(tt_split, 
+           metrics = class_metrics)
+```
+
+Results:
+```{r}
+lr_ridge_metrics <- lr_ridge_last_fit %>% collect_metrics()
+lr_ridge_metrics
+```
+
+
+#--------------------------
+# 3: k-NN
+#--------------------------
+
+#Recipe:
+```{r}
+standard_recipe
+```
+
+#Model:
+```{r}
+knn_class_mod <- nearest_neighbor(neighbors = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("kknn", importance = "impurity")
+```
+
+#Workflow:
+```{r}
+knn_class_workflow <-
+  workflow() %>% 
+  add_model(knn_class_mod) %>% 
+  add_recipe(standard_recipe)
+knn_class_workflow
+```
+
+#Tuning:
+
+Tuning grid:
+```{r}
+knn_class_tune_grid <- tibble(neighbors = 5:100*5 + 1)
+knn_class_tune_grid
+```
+
+Tuning:
+```{r}
+knn_tune_res <- tune_grid(
+  knn_class_mod ,
+  standard_recipe,
+  grid = knn_class_tune_grid,
+  metrics = class_metrics,
+  resamples = cv_folds
+)
+```
+
+Save tuning results:
+```{r}
+save(knn_tune_res, file = "quartile_tune_knn")
+```
+
+Results:
+```{r}
+knn_tune_metrics <- knn_tune_res %>% collect_metrics()
+knn_tune_metrics
+```
+
+Plot::
+```{r}
+knn_tune_metrics %>% 
+  ggplot(aes(x = neighbors, y = mean)) + 
+  geom_point() + geom_line() + 
+  facet_wrap(~ .metric, scales = "free_y")
+```
+
+Select best model through the one standard error rule:
+```{r}
+knn_class_best_model <- select_by_one_std_err(knn_tune_res, metric = "roc_auc", desc(neighbors))
+knn_class_best_model
+```
+
+#Finalize workflow:
+```{r}
+knn_class_workflow_final <- 
+  knn_class_workflow %>% 
+  finalize_workflow(knn_class_best_model)
+knn_class_workflow_final 
+```
+
+#Test:
+On the test set:
+```{r}
+knn_last_fit <- knn_class_workflow_final  %>% 
+  last_fit(tt_split, 
+           metrics = class_metrics)
+```
+
+Results:
+```{r}
+knn_metrics <- knn_last_fit %>% collect_metrics()
+knn_metrics
+```
+
+#--------------------------
+# 4: XGB (Gradient Boosting)
+#--------------------------
+
+#Recipe:
+```{r}
+tree_recipe
+```
+
+#Model:
+```{r}
+xgb_model_tune <- 
+  boost_tree(trees = tune(), tree_depth = tune(), 
+             learn_rate = tune(), stop_iter = 500) %>%
+  set_mode("classification") %>%
+  set_engine("xgboost", importance = "impurity")
+```
+
+#Workflow:
+```{r}
+xgb_wf <- workflow() %>%
+  add_recipe(tree_recipe) %>%
+  add_model(xgb_model_tune)
+xgb_wf
+```
+
+#Tuning:
+Speed up computation:
+```{r}
+registerDoParallel()
+```
+
+Tuning grid:
+```{r}
+xgb_grid <- expand.grid(trees = 500 * 1:20, 
+                        learn_rate = c(0.1, 0.01), 
+                        tree_depth = 1:5*2)
+xgb_grid
+```
+
+Performing grid search:
+```{r}
+xgb_tune_res <- tune_grid(
+  xgb_wf,
+  resamples = cv_folds,
+  grid = xgb_grid,
+  metrics = class_metrics
+)
+```
+
+Save tuning results:
+```{r}
+save(xgb_tune_res, file = "quartile_tune_xgb")
+```
+
+Extract the metrics:
+```{r}
+xgb_tune_metrics <- xgb_tune_res %>%
+  collect_metrics()
+xgb_tune_metrics
+```
+
+Selecting the best model through the one standard error rule:
+```{r}
+xgb_model <- select_by_one_std_err(xgb_tune_res, metric = "roc_auc", trees)
+xgb_model
+```
+
+#Finalize workflow:
+```{r}
+xgb_final_wf <- 
+  xgb_wf %>% 
+  finalize_workflow(xgb_model)
+xgb_final_wf
+```
+
+#Test:
+On the test set:
+```{r}
+xgb_final_fit <- xgb_final_wf %>%
+  last_fit(tt_split, metrics = class_metrics)
+```
+
+Results:
+```{r}
+xgb_metrics <- xgb_final_fit %>%
+  collect_metrics()
+xgb_metrics
+```
+
+#--------------------------
+# 5: Random Forest
+#--------------------------
+
+#Recipe:
+```{r}
+tree_recipe
+```
+
+#Model:
+```{r}
+rf_model_tune <- rand_forest(mtry = tune(), trees = 2500) %>%
+  set_mode("classification") %>%
+  set_engine("ranger", importance = "impurity")
+```
+
+#Workflow:
+```{r}
+rf_wf <- workflow() %>%
+  add_recipe(tree_recipe) %>%
+  add_model(rf_model_tune)
+rf_wf
+```
+
+#Tuning:
+
+For speeding up the process:
+```{r}
+registerDoParallel()
+```
+
+Tuning with a tuning grid equal to the length of the number of parameters:
+```{r}
+set.seed(99154345)
+rf_tune_res <- tune_grid(
+  rf_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 1:66),
+  metrics = class_metrics
+)
+rf_tune_res
+```
+
+Save tuning results:
+```{r}
+save(rf_tune_res, file = "quartile_tune_rf")
+```
+
+Collecting the metrics:
+```{r}
+rf_tune_res %>%
+  collect_metrics()
+```
+
+Plot:
+```{r}
+rf_metrics <- rf_tune_res %>% collect_metrics()
+rf_metrics %>%
+  ggplot(aes(x = mtry, y = mean,
+             ymin = mean - std_err, ymax = mean + std_err)) +
+  geom_errorbar(width = 0.1) +
+  geom_point() +
+  facet_wrap(~ .metric, scale = "free_y")
+```
+
+Selecting the best one though the one standard error rule:
+```{r}
+rf_model <- select_by_one_std_err(rf_tune_res, metric = "roc_auc", mtry)
+rf_model
+```
+
+#Finalize workflow:
+```{r}
+rf_final_wf <- 
+  rf_wf %>% 
+  finalize_workflow(rf_model)
+rf_final_wf
+```
+
+#Test:
+On the test set:
+```{r}
+rf_final_fit <- rf_final_wf %>%
+  last_fit(tt_split, metrics = class_metrics)
+```
+
+Metrics:
+```{r}
+rf_metrics <- rf_final_fit %>%
+  collect_metrics()
+rf_metrics
+```
+
+#--------------------------------------------------------------------
+# Most important features for the best model (random forest): 
+#--------------------------------------------------------------------
+
+```{r}
+rf_classification_important_features <- rf_final_fit %>% 
+  extract_fit_parsnip() %>% 
+  vip(num_features = 20)
+rf_classification_important_features
+```
+
+#--------------------------------------------------------------------
+# Error analysis on test set for best performing model: random forest
+#--------------------------------------------------------------------
+Creating a dataframe with the prediction and the true ESG quartile:
+```{r}
+predictions_all <- rf_final_fit$.predictions
+my_df <- as.data.frame(predictions_all)
+df_predicted_actual <- my_df[c(".pred_class", "ESG.quartile")] 
+df_predicted_actual
+```
+
+Creating a column stating whether it is a correct prediction, a column with the absolute difference, and calculating the accuracy besides the number of predictions.
+```{r}
+df_predicted_actual$correct <- ifelse(df_predicted_actual$.pred_class == df_predicted_actual$ESG.quartile, 1, 0)
+df_predicted_actual$abs_diff <- abs(as.numeric(as.numeric(df_predicted_actual$.pred_class) - as.numeric(df_predicted_actual$ESG.quartile)))
+df_predicted_actual
+#checking the accuracy
+print("accuracy is:")
+sum(df_predicted_actual$correct)/length(df_predicted_actual$correct) #is correct, same accuracy
+#stats
+print("number of predictions is:")
+length(df_predicted_actual$correct)
+```
+
+Filter on incorrect predictions:
+```{r}
+df_predicted_actual_incorrect <- df_predicted_actual[df_predicted_actual$correct == 0, ]
+df_predicted_actual_incorrect
+```
+Performing calculations:
+```{r}
+#number of incorrect predictions
+n_incorrect <- length(df_predicted_actual_incorrect$abs_diff)
+n_incorrect
+
+#1 classes from the true one
+df_predicted_actual_incorrect_pred_1 <- df_predicted_actual_incorrect[df_predicted_actual_incorrect$abs_diff == 1, ]
+num_abs_diff_1 <- length(df_predicted_actual_incorrect_pred_1$abs_diff)
+num_abs_diff_1
+
+#2 classes from the true one
+df_predicted_actual_incorrect_pred_2 <- df_predicted_actual_incorrect[df_predicted_actual_incorrect$abs_diff == 2, ]
+num_abs_diff_2 <- length(df_predicted_actual_incorrect_pred_2$abs_diff)
+num_abs_diff_2
+
+#total check
+num_abs_diff_1 + num_abs_diff_2
+```
+
+```{r}
+print(paste("For the", n_incorrect, "incorrect predictions"))
+print(paste(num_abs_diff_1,"deviate one class, which is", (num_abs_diff_1/n_incorrect), "percent"))
+print(paste(num_abs_diff_2,"deviate two classes, which is", (num_abs_diff_2/n_incorrect), "percent"))
+```
+
+#-------------------------------------------------------------------------------
+#Fit to the expand data set to the widen the ESG stock universe
+#-------------------------------------------------------------------------------
+Loading the expand data set:
+```{r}
+expand_final_w_n<- readRDS(file = "expand_final_w_n.rds")
+head(expand_final_w_n)
+```
+
+Performing the random forest model:
+```{r}
+set.seed(5555)
+fit_wf_final_rf <- fit(rf_final_wf, tt_train)
+final_pred_rf <- predict(fit_wf_final_rf, expand_final_w_n)
+head(final_pred_rf)
+```
+
+Subtracting the predictions:
+```{r}
+list_pred <- as.data.frame(final_pred_rf)
+list_pred$.pred
+```
+
+Creating a dataframe with the .pred and the ISIN:
+```{r}
+expand_final_w_n$rf_pred <- list_pred$.pred
+head(expand_final_w_n)
+```
+
+Creating a dataframe with the ISIN and the predictions for the 1,742 stocks
+```{r}
+expand_quartiles_rf_pred <- expand_final_w_n[c("ISIN", "rf_pred")]
+head(expand_quartiles_rf_pred)
+```
+
+To csv:
+```{r}
+write.csv(expand_quartiles_rf_pred, "expand_ESG_quartile_rf_pred_09_07_2022.csv")
+```
+
+*End* 

@@ -1,0 +1,261 @@
+---
+title: "R Notebook C 447614 BAM Thesis - Keras"
+author: "447614"
+output: html_notebook
+---
+05-07-2022
+
+#-------------------------------------------------------------------------------
+#Packages
+#-------------------------------------------------------------------------------
+Loading the packages:
+```{r}
+library('dplyr')
+library('DescTools')
+library('tidymodels')
+library('readr')
+library('neuralnet')
+library('doParallel')
+library('stargazer')
+```
+
+#-------------------------------------------------------------------------------
+#Data
+#-------------------------------------------------------------------------------
+Loading the data:
+```{r}
+tt_sub_final_w_n <- readRDS(file = "tt_sub_final_w_n.rds")
+head(tt_sub_final_w_n)
+```
+
+Checking the descriptives:
+```{r}
+stargazer(tt_sub_final_w_n, type = "text", median = TRUE)
+```
+
+#-------------------------------------------------------------------------------
+# Metrics
+#-------------------------------------------------------------------------------
+```{r}
+reg_metrics <- metric_set(rmse, rsq_trad, mae)
+```
+
+#-------------------------------------------------------------------------------
+# Split
+#-------------------------------------------------------------------------------
+
+#----------------------------
+#Train-validation-test split
+#----------------------------
+70% for training, 30% for testing
+```{r}
+set.seed(7777)
+tt_split <- initial_split(tt_sub_final_w_n, prop = 0.7)
+tt_split
+```
+
+Creating the dataframes for train and test:
+```{r}
+tt_train <- training(tt_split)
+tt_test  <- testing(tt_split)
+```
+
+#----------------------------
+#Cross validation folds
+#----------------------------
+For model tuning (validation test), a 5-fold cross-validation (CV) is employed.
+The following code creates the CV folds out of the train set:
+```{r}
+set.seed(8225)
+cv_folds <- tt_train %>% 
+  vfold_cv(v =5)
+cv_folds
+```
+
+#-------------------------------------------------------------------------------
+# Standard recipe
+#-------------------------------------------------------------------------------
+
+*standard_recipe*
+```{r}
+standard_recipe <- 
+  recipe(`ESG score` ~ 
+           #Activity:
+           `Receivables turnover ratio` + `Working capital turnover ratio` + `Total asset turnover ratio` +
+           #Profitability:
+           `Gross profit margin` + `Net profit margin` + 
+           #Liquidity:
+           `Current ratio` + 
+           #Solvency:
+           `Debt-to-assets ratio` + `Debt-to-EBITDA ratio` + `Interest coverage ratio` + 
+           #Valuation:
+           `Price-to-earnings ratio` + `Earnings per share` + `Dividend yield` + 
+           #Size:
+           `Market capitalisation` + `Number of employees` + `Total assets` + 
+           #characteristics:
+           `Sector` + `Country` + `Stock volatility` +
+           #ESG data availability:
+           `ESG data availability low` + `ESG data availability middle` 
+         #Data:
+         , data = tt_train) %>%
+  #Dummies:
+  step_dummy(`Sector`, `Country`) %>% 
+  #Log transformation:
+  step_log(`Market capitalisation`, `Number of employees`, `Total assets`, `Stock volatility`) %>%
+  #Normalization:
+  step_normalize(`Receivables turnover ratio`, `Working capital turnover ratio`, `Total asset turnover ratio`,
+                 `Gross profit margin`, `Net profit margin`, 
+                 `Current ratio`,
+                 `Debt-to-assets ratio`, `Debt-to-EBITDA ratio`, `Interest coverage ratio`,
+                 `Price-to-earnings ratio`, `Earnings per share`, `Dividend yield`, 
+                 `Market capitalisation`, `Number of employees`, `Total assets`,
+                 `Stock volatility`)
+standard_recipe 
+```
+
+#-------------------------------------------------------------------------------
+# Keras Model
+#-------------------------------------------------------------------------------
+
+#Model:
+A single layer feedforward neural network:
+```{r}
+ads_keras_mlp <- mlp(hidden_units = tune(), epochs = 7500, 
+                     activation = "relu") %>% 
+  set_engine("keras", verbose = 0, batch_size = 32, metrics = c("mse", "mae"), importance = "impurity") %>% 
+  set_mode("regression")
+```
+7500 epochs specifies that 7500 update iterations through the training data should be made during training.
+The model feeds the data to the optimization algorithm in batches of 32 data points. 
+
+#Workflow:
+```{r}
+keras_mlp_wf <- workflow() %>% 
+  add_recipe(standard_recipe) %>% 
+  add_model(ads_keras_mlp)
+```
+
+Requisite:
+```{r}
+stopImplicitCluster()
+```
+
+#Tuning grid
+The tuning rid for the first round:
+```{r}
+keras_grid1 <- tibble(hidden_units = c(2,4,8,16,32,64,128,256,512,1024,2048)) 
+keras_grid1
+```
+
+#Tuning Round 1:
+```{r}
+set.seed(99154345)
+keras_tune_res_1 <- tune_grid(
+  keras_mlp_wf,
+  resamples = cv_folds,
+  grid = keras_grid1,
+  metrics = reg_metrics,
+  control = control_grid(verbose = TRUE)
+)
+```
+
+Save the file:
+```{r}
+save(keras_tune_res_1, file = "keras_tune_round1")
+```
+
+Results:
+```{r}
+keras_tune_res_1 %>%
+  collect_metrics()
+```
+
+Plot:
+```{r}
+keras_tune_res_1 %>%
+  collect_metrics() %>%
+  ggplot(aes(x = hidden_units, y = mean, ymin = mean - std_err, ymax = mean + std_err, 
+             colour = .metric)) +
+  geom_errorbar() + 
+  geom_line() +
+  geom_point() +
+  facet_grid(.metric ~ ., scales = "free_y") 
+```
+
+```{r}
+keras_selected_1 <- select_by_one_std_err(keras_tune_res_1, metric = "rmse", hidden_units)
+keras_selected_1
+```
+Results in 4 hidden units.
+
+#------------------------
+#Round 2 
+#------------------------
+Second tuning grid:
+```{r}
+keras_grid2 <- tibble(hidden_units = c(3,4,5,6,7,8)) 
+keras_grid2
+```
+
+#Tune
+```{r}
+set.seed(99154345)
+keras_tune_res_2 <- tune_grid(
+  keras_mlp_wf,
+  resamples = cv_folds,
+  grid = keras_grid2,
+  metrics = reg_metrics,
+  control = control_grid(verbose = TRUE)
+)
+```
+
+Results:
+```{r}
+keras_tune_res_2 %>%
+  collect_metrics()
+```
+
+Save the file:
+```{r}
+save(keras_tune_res_2, file = "keras_tune_round2")
+```
+
+Plot:
+```{r}
+keras_tune_res_2 %>%
+  collect_metrics() %>%
+  ggplot(aes(x = hidden_units, y = mean, ymin = mean - std_err, ymax = mean + std_err, 
+             colour = .metric)) +
+  geom_errorbar() + 
+  geom_line() +
+  geom_point() +
+  facet_grid(.metric ~ ., scales = "free_y") 
+```
+
+Select through the one standard error rule:
+```{r}
+keras_selected_2 <- select_by_one_std_err(keras_tune_res_2, metric = "rmse", hidden_units)
+keras_selected_2
+```
+
+#Finalize workflow:
+```{r}
+keras_mlp_final_wf <- finalize_workflow(keras_mlp_wf, keras_selected_2) 
+keras_mlp_final_wf
+```
+
+#Test
+On the test set:
+```{r}
+set.seed(9523)
+keras_mlp_final_fit <- keras_mlp_final_wf %>%
+  last_fit(tt_split, metrics = reg_metrics)
+```
+
+The results:
+```{r}
+keras_mlp_final_fit %>%
+  collect_metrics()
+```
+*End*
+
