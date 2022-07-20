@@ -1,0 +1,857 @@
+---
+title: "R Notebook G 447614 BAM Thesis - Correlations with significance level"
+author: "447614"
+output: html_notebook
+---
+20-07-2022
+
+#-------------------------------------------------------------------------------
+# Packages
+#-------------------------------------------------------------------------------
+```{r}
+library("tidymodels")
+library("readr")
+library("stargazer")
+library("dplyr")
+library("DescTools")
+library("glmnet")
+library("leaps")
+library("xgboost")
+library("themis")
+library("knitr")
+library("ranger")
+library("doParallel")
+library("vip")
+library("ggridges")
+library("skimr")
+library("forcats")
+library("corrplot")
+library("readr")
+library("neuralnet")
+library('fastDummies')
+library('xtable')
+```
+
+#-------------------------------------------------------------------------------
+# Data
+#-------------------------------------------------------------------------------
+Loading the data:
+```{r}
+tt_sub_final_w_n <- readRDS(file = "tt_sub_final_w_n.rds")
+head(tt_sub_final_w_n)
+```
+
+Checking the descriptive statistics:
+```{r}
+stargazer(tt_sub_final_w_n, type="text", median = TRUE)
+```
+
+Including the dummies:
+```{r}
+tt_sub_final_w_n_dummies <- dummy_cols(tt_sub_final_w_n, select_columns= 'Sector', remove_first_dummy = FALSE)
+tt_sub_final_w_n_dummies <- dummy_cols(tt_sub_final_w_n_dummies, select_columns= 'Country', remove_first_dummy = FALSE)
+```
+
+#-------------------------------------------------------------------------------
+# Significance ESG score & features
+#-------------------------------------------------------------------------------
+
+*Receivables turnover ratio*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Receivables turnover ratio`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Receivables turnover ratio`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Working capital turnover ratio*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Working capital turnover ratio`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Working capital turnover ratio`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Total asset turnover ratio*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Total asset turnover ratio`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Total asset turnover ratio`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Gross profit margin*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Gross profit margin`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Gross profit margin`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Net profit margin*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Net profit margin`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Net profit margin`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Current ratio*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Current ratio`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Current ratio`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Debt-to-assets ratio*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Debt-to-assets ratio`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Debt-to-assets ratio`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Debt-to-EBITDA ratio*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Debt-to-EBITDA ratio`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Debt-to-EBITDA ratio`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Interest coverage ratio*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Interest coverage ratio`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Interest coverage ratio`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Price-to-earnings ratio*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Price-to-earnings ratio`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Price-to-earnings ratio`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Earnings per share*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Earnings per share`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Earnings per share`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Dividend yield*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Dividend yield`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Dividend yield`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Market capitalisation*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Market capitalisation`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Market capitalisation`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Number of employees*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Number of employees`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Number of employees`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Total assets*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Total assets`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Total assets`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Stock volatility*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Stock volatility`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Stock volatility`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*ESG data availability low*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`ESG data availability low`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`ESG data availability low`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*ESG data availability middle*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`ESG data availability middle`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`ESG data availability middle`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*ESG data availability high*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`ESG data availability high`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`ESG data availability high`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+#-------------------------------------------------------------------------------
+
+*Sector_Aerospace_and_Defense*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Aerospace_and_Defense`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Aerospace_and_Defense`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Automobiles_and_Parts*  
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Automobiles_and_Parts`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Automobiles_and_Parts`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Beverages*  
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Beverages`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Beverages`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Chemicals*   
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Chemicals`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Chemicals`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Construction_and_Materials*  
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Construction_and_Materials`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Construction_and_Materials`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Consumer_Services*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Consumer_Services`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Consumer_Services`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Electricity* 
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Electricity`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Electricity`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Electronic_and_Electrical_Equipment* 
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Electronic_and_Electrical_Equipment`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Electronic_and_Electrical_Equipment`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Food_Producers*     
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Food_Producers`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Food_Producers`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Gas_Water_and_Multi_utilities* 
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Gas_Water_and_Multi_utilities`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Gas_Water_and_Multi_utilities`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_General_Industrials*     
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_General_Industrials`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_General_Industrials`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Health_Care_Providers*    
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Health_Care_Providers`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Health_Care_Providers`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Household_Goods_and_Home_Construction* 
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Household_Goods_and_Home_Construction`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Household_Goods_and_Home_Construction`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Industrial_Engineering*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Engineering`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Engineering`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Industrial_Materials* 
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Materials`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Materials`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Industrial_Metals_and_Mining*  
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Metals_and_Mining`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Metals_and_Mining`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Industrial_Support_Services*    
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Support_Services`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Support_Services`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Industrial_Transportation*   
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Transportation`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Industrial_Transportation`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Leisure_Goods*    
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Leisure_Goods`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Leisure_Goods`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Media*              
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Media`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Media`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Medical_Equipment_and_Services*  
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Medical_Equipment_and_Services`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Medical_Equipment_and_Services`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Oil_Gas_and_Coal*    
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Oil_Gas_and_Coal`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Oil_Gas_and_Coal`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Other*                              
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Other`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Other`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Personal_Care_Drug_and_Grocery_Stores*
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Personal_Care_Drug_and_Grocery_Stores`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Personal_Care_Drug_and_Grocery_Stores`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Personal_Goods*     
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Personal_Goods`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Personal_Goods`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Pharmaceuticals_and_Biotechnology*   
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Pharmaceuticals_and_Biotechnology`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Pharmaceuticals_and_Biotechnology`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Retailers*         
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Retailers`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Retailers`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Software_and_Computer_Services*     
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Software_and_Computer_Services`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Software_and_Computer_Services`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Technology_Hardware_and_Equipment*   
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Technology_Hardware_and_Equipment`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Technology_Hardware_and_Equipment`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Telecommunications_Equipment*       
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Telecommunications_Equipment`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Telecommunications_Equipment`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Telecommunications_Service_Providers*  
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Telecommunications_Service_Providers`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Telecommunications_Service_Providers`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Sector_Travel_and_Leisure*  
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Travel_and_Leisure`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Sector_Travel_and_Leisure`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_AT*                   
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_AT`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_AT`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_BE*         
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_BE`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_BE`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_CH*                     
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_CH`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_CH`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_DE*          
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_DE`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_DE`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_DK*            
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_DK`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_DK`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_ES*             
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_ES`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_ES`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_FI*                   
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_FI`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_FI`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_FR*       
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_FR`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_FR`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_GB*            
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_GB`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_GB`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_IT*       
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_IT`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_IT`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_NL*            
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_NL`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_NL`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_NO*       
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_NO`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_NO`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_Other*    
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_Other`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_Other`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_SE*              
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_SE`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_SE`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*Country_US* 
+```{r}
+round(cor(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_US`),3)
+res <- cor.test(tt_sub_final_w_n_dummies$`ESG score`, tt_sub_final_w_n_dummies$`Country_US`, 
+                    method = "pearson")
+
+res
+print("The p-values is:")
+res$p.value
+ifelse(res$p.value<0.001,"3-stars",ifelse(res$p.value<0.01,"2-stars", ifelse(res$p.value<0.05,"1-star",NA)))
+```
+
+*End*
+
+
+
+
