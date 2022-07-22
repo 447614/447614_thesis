@@ -1,0 +1,69 @@
+---
+title: "R Notebook H 447614 BAM Thesis - Testing the significance of the Sharpe ratios"
+author: "447614"
+output: html_notebook
+---
+22-07-2022
+
+#-------------------------------------------------------------------------------
+#Data
+#-------------------------------------------------------------------------------
+Loading the data:
+```{r}
+sharpetesting_df <- read.csv("sharpetesting.csv", sep = ";", fileEncoding="UTF-8-BOM")
+head(sharpetesting_df)
+```
+
+Package:
+```{r}
+library("PeerPerformance")
+```
+
+#-------------------------------------------------------------------------------
+#Distributions
+#-------------------------------------------------------------------------------
+```{r}
+hist(sharpetesting_df$y1_widened[1:12])
+hist(sharpetesting_df$y1_current[1:12])
+hist(sharpetesting_df$y5_widened[1:60])
+hist(sharpetesting_df$y5_current[1:60])
+hist(sharpetesting_df$y10_widened[1:120])
+hist(sharpetesting_df$y10_current[1:120])
+hist(sharpetesting_df$y20_widened[1:240])
+hist(sharpetesting_df$y20_current[1:240])
+```
+
+
+#-------------------------------------------------------------------------------
+#Data
+#-------------------------------------------------------------------------------
+Making use of the studentised bootstrap approach: type = 2                      
+Making use of heteroscedastic-autocorrelation robust standard errors: hac = TRUE      
+
+Setting up the components:
+```{r}
+ctr = list(type = 2, hac = TRUE)
+```
+
+Test for 1Y portfolios:
+```{r}
+sharpeTesting(sharpetesting_df$y1_widened[1:12], sharpetesting_df$y1_current[1:12], control = ctr)
+```
+
+
+Test for 5Y portfolios:
+```{r}
+sharpeTesting(sharpetesting_df$y5_widened[1:60], sharpetesting_df$y5_current[1:60], control = ctr)
+```
+
+Test for 10Y portfolios:
+```{r}
+sharpeTesting(sharpetesting_df$y10_widened[1:120], sharpetesting_df$y10_current[1:120], control = ctr)
+```
+
+Test for 20Y portfolios:
+```{r}
+sharpeTesting(sharpetesting_df$y20_widened[1:240], sharpetesting_df$y20_current[1:240], control = ctr)
+```
+
+*End* 
